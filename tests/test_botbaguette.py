@@ -161,50 +161,67 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
         def mk(text, cx, cy):
             return {"text": text, "norm": scanner._norm(text), "cx": cx, "cy": cy, "conf": 0.99}
 
-        # Tech tree with merged header
+        # Tech tree with merged header (and language-independent: Spanish / German)
         res_tech = scanner.parse_ocr_items([
-            mk("75.1kArbreTechnologiqu", 0.35, 0.10),
+            mk("75.1kArbolTecnologico", 0.35, 0.10),
             mk("93", 0.20, 0.15),
-            mk("57.4%(Termine)", 0.27, 0.33),
+            mk("57.4%", 0.27, 0.33),
+            mk("9.55%", 0.73, 0.33),
         ])
         self.assertEqual(res_tech["screen_type"], "tech_tree")
         self.assertEqual(res_tech["visible"], {"potions": 75100, "fioles_vertes": 93})
         self.assertIn("57.4", res_tech["secret"]["tech_tree_json"])
 
-        # Skills screen with x5 summon cost
+        # Skills screen in Spanish ('Habilidades 18/18' + 'Invocar x5')
         res_skills = scanner.parse_ocr_items([
             mk("568", 0.19, 0.10),
-            mk("competences18/18", 0.50, 0.10),
-            mk("Invoquerx5", 0.50, 0.72),
+            mk("Habilidades 18/18", 0.50, 0.10),
+            mk("Invocar x5", 0.50, 0.72),
             mk("186", 0.54, 0.75),
         ])
         self.assertEqual(res_skills["screen_type"], "skills")
         self.assertEqual(res_skills["visible"], {"competences": 568})
         self.assertEqual(res_skills["secret"], {"skill_summon_cost": 37.2})
 
-        # Mount merge vs Pet merge
+        # Mount merge vs Pet merge in English ('697 Selected' / '949 Selected')
         res_mnt = scanner.parse_ocr_items([
-            mk("697selectionne", 0.25, 0.32),
-            mk("Ameliorer", 0.80, 0.32),
+            mk("7511/176086 xp", 0.50, 0.26),
+            mk("697 Selected", 0.25, 0.32),
+            mk("Upgrade", 0.80, 0.32),
         ])
         self.assertEqual(res_mnt["visible"], {"fusion_montures": 697})
 
         res_pet = scanner.parse_ocr_items([
-            mk("Animaux", 0.50, 0.10),
-            mk("949selectionne", 0.25, 0.32),
-            mk("Ameliorer", 0.80, 0.31),
+            mk("Pets", 0.50, 0.10),
+            mk("276197/961824 xp", 0.50, 0.26),
+            mk("949 Selected", 0.25, 0.32),
+            mk("Upgrade", 0.80, 0.31),
         ])
         self.assertEqual(res_pet["visible"], {"fusion_pets": 949})
 
-        # Main screen with player power ('￥369b' -> '369b')
+        # Main screen in Spanish ('Forja' + 'Nivel 32' + OCR typo '18l032' + power '￥369b')
         res_main = scanner.parse_ocr_items([
             mk("Plolipop", 0.23, 0.09),
             mk("￥369b", 0.24, 0.11),
-            mk("Forge", 0.73, 0.76),
-            mk("Niveau32", 0.74, 0.77),
-            mk("181032", 0.51, 0.80),
+            mk("Forja", 0.73, 0.76),
+            mk("Nivel 32", 0.74, 0.77),
+            mk("18l032", 0.51, 0.80),
         ])
         self.assertEqual(res_main["visible"], {"puissance": "369b", "marteaux": 181032})
+        self.assertEqual(res_main["secret"], {"forge_tier_j1": 5, "forge_tier_j3": 4})
+
+        # Animals screen in German (pure timers + '+1', zero French/English keywords!)
+        res_de_animals = scanner.parse_ocr_items([
+            mk("65", 0.20, 0.10),
+            mk("Haustiere", 0.50, 0.10),
+            mk("Beschworen x1", 0.50, 0.54),
+            mk("100", 0.53, 0.57),
+            mk("+1", 0.87, 0.71),
+            mk("5h47m", 0.26, 0.76),
+        ])
+        self.assertEqual(res_de_animals["screen_type"], "animals")
+        self.assertEqual(res_de_animals["visible"], {"oeufs": 65})
+        self.assertEqual(res_de_animals["secret"], {"egg_summon_cost": 100.0})
 
         embed_with_power = profile_ui.build_profile_embed(
             {"pseudo": "Plolipop", "puissance": "369b"},

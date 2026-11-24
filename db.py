@@ -128,6 +128,15 @@ def init_db(db_path: Optional[str] = None) -> None:
                 conn.execute(f"ALTER TABLE profiles ADD COLUMN {col} {col_type}")
             except sqlite3.OperationalError:
                 pass
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS war_snipes (
+                user_id INTEGER NOT NULL,
+                war_day INTEGER NOT NULL,
+                PRIMARY KEY (user_id, war_day)
+            )
+            """
+        )
         conn.commit()
 
 
@@ -166,3 +175,40 @@ def update_profile(user_id: int, updates: Dict[str, Any], db_path: Optional[str]
         conn.commit()
         row = conn.execute("SELECT * FROM profiles WHERE user_id = ?", (user_id,)).fetchone()
         return dict(row)
+
+
+def get_all_profiles(db_path: Optional[str] = None) -> list:
+    with _connect(db_path) as conn:
+        rows = conn.execute("SELECT * FROM profiles").fetchall()
+        return [dict(r) for r in rows]
+
+
+def toggle_snipe(user_id: int, war_day: int, db_path: Optional[str] = None) -> bool:
+    """Toggle sniper registration for a war day (1..5). Returns True if now active, False if removed."""
+    with _connect(db_path) as conn:
+        exists = conn.execute(
+            "SELECT 1 FROM war_snipes WHERE user_id = ? AND war_day = ?",
+            (user_id, war_day),
+        ).fetchone()
+        if exists:
+            conn.execute(
+                "DELETE FROM war_snipes WHERE user_id = ? AND war_day = ?",
+                (user_id, war_day),
+            )
+            conn.commit()
+            return False
+        conn.execute(
+            "INSERT INTO war_snipes (user_id, war_day) VALUES (?, ?)",
+            (user_id, war_day),
+        )
+        conn.commit()
+        return True
+
+
+def get_snipers(war_day: int, db_path: Optional[str] = None) -> set:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT user_id FROM war_snipes WHERE war_day = ?",
+            (war_day,),
+        ).fetchall()
+        return {int(r["user_id"]) for r in rows}

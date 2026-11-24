@@ -227,6 +227,32 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(view.visible["puissance"], "400b")
         self.assertEqual(view.visible["marteaux"], 185000)
 
+    async def test_snipe_and_war_embed(self):
+        db.update_profile(1, {"pseudo": "MisterArrow", "marteaux": 40000}, db_path=self.db_path)  # 200 000 pts J1
+        db.update_profile(2, {"pseudo": "Glad1", "marteaux": 30000}, db_path=self.db_path)        # 150 000 pts J1
+        db.update_profile(3, {"pseudo": "Vold", "marteaux": 10000}, db_path=self.db_path)         # 50 000 pts J1
+
+        # Toggle sniper ON then OFF then ON
+        self.assertTrue(db.toggle_snipe(2, 1, db_path=self.db_path))
+        self.assertFalse(db.toggle_snipe(2, 1, db_path=self.db_path))
+        self.assertTrue(db.toggle_snipe(2, 1, db_path=self.db_path))
+        self.assertTrue(db.toggle_snipe(3, 1, db_path=self.db_path))
+
+        snipers = db.get_snipers(1, db_path=self.db_path)
+        self.assertEqual(snipers, {2, 3})
+
+        embed = profile_ui.build_war_embed(
+            1,
+            db.get_all_profiles(db_path=self.db_path),
+            snipers,
+            emoji_map={},
+            clan_name="Baguette6",
+        )
+        self.assertIn("Jour 1 (Mardi)", embed.title)
+        self.assertIn("400 000", embed.description)  # Total clan
+        self.assertIn("Snipers : 2", embed.description)
+        self.assertIn("200 000", embed.description)  # Total snipers (150k + 50k)
+
 
 if __name__ == "__main__":
     unittest.main()

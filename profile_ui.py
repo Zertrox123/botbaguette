@@ -130,6 +130,66 @@ def build_profile_embed(
     return embed
 
 
+def build_war_embed(
+    war_day: int,
+    profiles: list,
+    sniper_ids: set,
+    emoji_map: Dict[str, discord.Emoji],
+    clan_name: str = "Baguette6",
+    now: Optional[datetime] = None,
+) -> discord.Embed:
+    e = lambda k: emoji_str(emoji_map, k)
+    current = now.astimezone(war_points.PARIS_TZ) if now is not None else datetime.now(war_points.PARIS_TZ)
+
+    resources_line = "  ".join(
+        f"{e(icon_key)} {label}" for icon_key, label in war_points.DAY_RESOURCE_LABELS.get(war_day, [])
+    )
+
+    scored = []
+    for p in profiles:
+        pts, _ = war_points.compute_day_potential(p, war_day)
+        uid = int(p["user_id"])
+        pseudo = p.get("pseudo") or f"Joueur {uid}"
+        if pts > 0 or uid in sniper_ids:
+            scored.append((pts, uid, pseudo))
+    scored.sort(key=lambda x: (-x[0], x[2].lower()))
+
+    total_clan = sum(pts for pts, _, _ in scored)
+    snipers = [(pts, uid, pseudo) for pts, uid, pseudo in scored if uid in sniper_ids]
+    total_snipers = sum(pts for pts, _, _ in snipers)
+
+    lines = [resources_line, ""]
+    lines.append("▶️ **Points :**")
+    if scored:
+        for pts, _uid, pseudo in scored:
+            lines.append(f"• **{pseudo} :** `{db.format_amount(pts)}` pts")
+    else:
+        lines.append("• *Aucun joueur enregistré pour le moment.*")
+
+    lines.append("")
+    lines.append(f"**Total Points du Clan :** `{db.format_amount(total_clan)}` pts")
+    lines.append("")
+    lines.append(f"🎯 **Snipers : {len(snipers)}**")
+    if snipers:
+        for _pts, _uid, pseudo in snipers:
+            lines.append(f"• **{pseudo}**")
+    else:
+        lines.append("• *Aucun sniper inscrit (`/snipe`)*")
+
+    lines.append("")
+    lines.append(f"**Total Points Snipers :** `{db.format_amount(total_snipers)}` pts")
+
+    day_label = war_points.WAR_DAY_NAMES.get(war_day, "")
+    title = f"⚔️ Points Potentiels Jour {war_day} ({day_label}) — {clan_name}"
+    embed = discord.Embed(
+        title=title,
+        description="\n".join(lines),
+        color=discord.Color.from_rgb(52, 152, 219),
+    )
+    embed.set_footer(text=current.strftime("%d-%m-%y %H:%M"))
+    return embed
+
+
 class AmountModal(discord.ui.Modal):
     def __init__(
         self,

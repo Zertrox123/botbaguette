@@ -25,6 +25,22 @@ WEEKDAY_TO_WAR_DAY: Dict[int, Optional[int]] = {
     6: None,  # Dimanche (repos)
 }
 
+WAR_DAY_NAMES: Dict[int, str] = {
+    1: "Mardi",
+    2: "Mercredi",
+    3: "Jeudi",
+    4: "Vendredi",
+    5: "Samedi",
+}
+
+DAY_RESOURCE_LABELS: Dict[int, List[Tuple[str, str]]] = {
+    1: [("fm_hammer", "Marteaux"), ("fm_ticket", "Compétences")],
+    2: [("fm_mountkey", "Clés Monture"), ("fm_mount_merge", "Fusion Montures")],
+    3: [("fm_hammer", "Marteaux"), ("fm_ticket", "Compétences"), ("fm_egg", "Œufs"), ("fm_pet_merge", "Fusion Pets")],
+    4: [("fm_mountkey", "Clés Monture"), ("fm_mount_merge", "Fusion Montures")],
+    5: [("fm_hammer", "Marteaux"), ("fm_egg", "Œufs"), ("fm_pet_merge", "Fusion Pets")],
+}
+
 # Coûts d'invocation moyens (Forge Master)
 SKILL_SUMMON_COST = 40      # ~37-50 tickets par invocation selon l'arbre techno
 MOUNT_SUMMON_COST = 50      # 48-50 clés par invocation

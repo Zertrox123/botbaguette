@@ -8,6 +8,7 @@ from discord.ext import commands
 import db
 import profile_ui
 import scanner
+import war_points
 
 
 def load_token() -> str:
@@ -191,6 +192,52 @@ async def scan(
     embed = build_scan_preview_embed(merged_visible, has_secret=bool(merged_secret))
     view = ScanConfirmView(interaction.user.id, merged_visible, merged_secret)
     await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+
+WAR_DAY_CHOICES = [
+    app_commands.Choice(name="Jour 1 (Mardi)", value=1),
+    app_commands.Choice(name="Jour 2 (Mercredi)", value=2),
+    app_commands.Choice(name="Jour 3 (Jeudi)", value=3),
+    app_commands.Choice(name="Jour 4 (Vendredi)", value=4),
+    app_commands.Choice(name="Jour 5 (Samedi)", value=5),
+]
+
+
+@bot.tree.command(name="snipe", description="Indique si tu peux sniper un jour de guerre (1 à 5)")
+@app_commands.allowed_installs(guilds=True, users=True)
+@app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+@app_commands.describe(jour="Jour de guerre (1 = Mardi ... 5 = Samedi)")
+@app_commands.choices(jour=WAR_DAY_CHOICES)
+async def snipe(interaction: discord.Interaction, jour: int):
+    db.get_or_create_profile(interaction.user.id, interaction.user.display_name)
+    active = db.toggle_snipe(interaction.user.id, jour)
+    day_name = war_points.WAR_DAY_NAMES.get(jour, "")
+    if active:
+        await interaction.response.send_message(
+            f"🎯 Tu es inscrit comme **Sniper** pour le **Jour {jour} ({day_name})**.",
+            ephemeral=True,
+        )
+    else:
+        await interaction.response.send_message(
+            f"❌ Tu n'es plus inscrit comme **Sniper** pour le **Jour {jour} ({day_name})**.",
+            ephemeral=True,
+        )
+
+
+@bot.tree.command(name="war", description="Affiche les points potentiels du clan et les snipers pour un jour de guerre")
+@app_commands.allowed_installs(guilds=True, users=True)
+@app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+@app_commands.describe(jour="Jour de guerre (1 = Mardi ... 5 = Samedi, par défaut aujourd'hui)")
+@app_commands.choices(jour=WAR_DAY_CHOICES)
+async def war(interaction: discord.Interaction, jour: Optional[int] = None):
+    if jour is None:
+        today_day, _ = war_points.get_day_info(war_points.datetime.now(war_points.PARIS_TZ))
+        jour = today_day or 1
+    profiles = db.get_all_profiles()
+    sniper_ids = db.get_snipers(jour)
+    clan_name = interaction.guild.name if interaction.guild else "Baguette6"
+    embed = profile_ui.build_war_embed(jour, profiles, sniper_ids, emoji_map, clan_name=clan_name)
+    await interaction.response.send_message(embed=embed)
 
 
 @bot.event

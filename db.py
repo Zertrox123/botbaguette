@@ -27,6 +27,7 @@ DEFAULT_PROFILE: Dict[str, Any] = {
     "forge_avg_j1": 5.0,
     "forge_avg_j3": 4.0,
     "egg_rarity_json": "{}",
+    "mount_rarity_json": "{}",
     "tech_tree_json": "{}",
     "updated_at": 0,
 }
@@ -110,6 +111,7 @@ def init_db(db_path: Optional[str] = None) -> None:
                 forge_avg_j1 REAL DEFAULT 5.0,
                 forge_avg_j3 REAL DEFAULT 4.0,
                 egg_rarity_json TEXT DEFAULT '{}',
+                mount_rarity_json TEXT DEFAULT '{}',
                 tech_tree_json TEXT DEFAULT '{}',
                 updated_at INTEGER DEFAULT 0
             )
@@ -130,6 +132,7 @@ def init_db(db_path: Optional[str] = None) -> None:
             ("forge_avg_j1", "REAL DEFAULT 5.0"),
             ("forge_avg_j3", "REAL DEFAULT 4.0"),
             ("egg_rarity_json", "TEXT DEFAULT '{}'"),
+            ("mount_rarity_json", "TEXT DEFAULT '{}'"),
             ("tech_tree_json", "TEXT DEFAULT '{}'"),
         ]
         for col, col_type in migrations:

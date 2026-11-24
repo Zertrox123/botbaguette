@@ -121,13 +121,14 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
             now=datetime(2026, 11, 24, 12, 0, tzinfo=war_points.PARIS_TZ),  # Mardi = J1
         )
         self.assertIn("Fioles vertes", embed.description)
-        self.assertEqual(len(embed.fields), 2)
-        self.assertEqual(embed.fields[0].name, "Fusions disponibles")
-        self.assertIn("697", embed.fields[0].value)
-        self.assertIn("949", embed.fields[0].value)
-        self.assertEqual(embed.fields[1].name, "Points potentiels")
-        self.assertIn("J1 — Mardi", embed.fields[1].value)
-        self.assertIn("J2 — Mercredi", embed.fields[1].value)
+        self.assertEqual(len(embed.fields), 3)
+        self.assertIn("Fusion Montures", embed.fields[0].name)
+        self.assertIn("697", embed.fields[0].name)
+        self.assertIn("Fusion Pets", embed.fields[1].name)
+        self.assertIn("949", embed.fields[1].name)
+        self.assertEqual(embed.fields[2].name, "Points potentiels")
+        self.assertIn("J1 — Mardi", embed.fields[2].value)
+        self.assertIn("J2 — Mercredi", embed.fields[2].value)
 
     async def test_war_points_all_days(self):
         sample = {

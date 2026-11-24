@@ -108,40 +108,54 @@ def _classify_rarity_rgb(rgb: Tuple[int, int, int]) -> str:
     return "commun"
 
 
-def _extract_pet_rarities(
+def _extract_merge_rarities(
     im: Optional[Image.Image],
     xp_y: float,
     total_selected: int,
 ) -> Dict[str, int]:
     """
-    Extract per-rarity pet/egg counts from the filter tile row below the XP bar on pet_merge screens.
-    Language-independent: uses tile RGB colors + circular-ring-masked badge OCR + exact total reconciliation.
+    Extract per-rarity pet or mount counts from the filter tile row below the XP bar on merge screens.
+    Language-independent: finds the tile row dynamically below xp_y, classifies tile RGB colors,
+    runs circular-ring-masked badge OCR, and reconciles against total_selected.
     """
     if im is None:
         return {}
     w, h = im.size
-    y_mid = min(h - 1, max(0, int(h * (xp_y + 0.122))))
+
+    # Dynamically locate the filter tile row below the grey top card (white modal bg with 2..6 colored tiles)
     spans: List[Tuple[int, int]] = []
-    in_tile = False
-    start = 0
-    for x in range(int(w * 0.06), int(w * 0.94)):
-        r, g, b = im.getpixel((x, y_mid))
-        is_bg = (r > 246 and g > 246 and b > 246)
-        if not is_bg and not in_tile:
-            in_tile, start = True, x
-        elif is_bg and in_tile:
-            in_tile = False
-            if x - start >= int(w * 0.05):
-                spans.append((start, x))
+    y_mid = 0
+    for offset in (0.122, 0.39, 0.14, 0.35):
+        cand_y = int(h * (xp_y + offset))
+        if not (0 <= cand_y < h):
+            continue
+        # Ensure we're inside the white modal area (left margin at x=0.10..0.22 should be near-white)
+        if min(im.getpixel((int(w * 0.16), cand_y))) < 238:
+            continue
+        row_spans: List[Tuple[int, int]] = []
+        in_tile = False
+        start = 0
+        for x in range(int(w * 0.16), int(w * 0.84)):
+            r, g, b = im.getpixel((x, cand_y))
+            is_bg = (r > 246 and g > 246 and b > 246)
+            if not is_bg and not in_tile:
+                in_tile, start = True, x
+            elif is_bg and in_tile:
+                in_tile = False
+                if int(w * 0.05) <= (x - start) <= int(w * 0.15):
+                    row_spans.append((start, x))
+        if 1 <= len(row_spans) <= 7:
+            spans = row_spans
+            y_mid = cand_y
+            break
 
     if not spans:
         return {}
 
-    parsed: List[Tuple[str, Optional[int], str]] = []
+    parsed: List[Tuple[str, Optional[int], float]] = []
     for x0, x1 in spans:
         tw = x1 - x0
         cx_t = (x0 + x1) // 2
-        # Detect top & bottom of this tile dynamically (independent of aspect ratio)
         y_top = y_mid
         while y_top > 0 and min(im.getpixel((cx_t, y_top))) < 246:
             y_top -= 1
@@ -153,34 +167,41 @@ def _extract_pet_rarities(
 
         bcx = int(x1 - tw * 0.01)
         bcy = int(y_bot - 1)
-        rad = max(7, int(tw * 0.24))
+        rad = max(7, int(tw * 0.25))
         crop = im.crop((max(0, bcx - rad), max(0, bcy - rad), min(w, bcx + rad), min(h, bcy + rad)))
         big = crop.resize((120, 120), Image.Resampling.LANCZOS)
         mask = Image.new("L", (120, 120), 0)
-        ImageDraw.Draw(mask).ellipse((16, 16, 104, 104), fill=255)
+        ImageDraw.Draw(mask).ellipse((12, 12, 108, 108), fill=255)
         clean = Image.new("RGB", (160, 160), (255, 255, 255))
         clean.paste(big, (20, 20), mask)
         clean = ImageEnhance.Contrast(clean).enhance(1.5)
 
         res, _ = _get_ocr()(clean)
         val: Optional[int] = None
-        raw_txt = ""
+        best_conf = 0.0
         for _, txt, conf in (res or []):
             t = _fix_digit_typos(txt.strip())
-            raw_txt = t
             if t.isdigit() and float(conf) >= 0.60:
                 val = int(t)
+                best_conf = float(conf)
                 break
-        parsed.append((rarity, val, raw_txt))
+        parsed.append((rarity, val, best_conf))
 
-    # Reconcile if exactly 1 tile was partially read and we know total_selected
+    # Reconcile against total_selected:
+    # Case A: exactly 1 tile unreadable -> fill with remainder
     missing_idxs = [i for i, (_, v, _) in enumerate(parsed) if v is None]
     known_sum = sum(v for _, v, _ in parsed if v is not None)
     if len(missing_idxs) == 1 and total_selected >= known_sum:
         idx = missing_idxs[0]
         rem = total_selected - known_sum
-        rarity, _, _ = parsed[idx]
-        parsed[idx] = (rarity, rem, str(rem))
+        parsed[idx] = (parsed[idx][0], rem, 1.0)
+    # Case B: all tiles read as digits, but sum != total_selected -> fix the lowest-confidence tile
+    elif not missing_idxs and total_selected > 0 and known_sum != total_selected:
+        worst_idx = min(range(len(parsed)), key=lambda i: parsed[i][2])
+        other_sum = known_sum - (parsed[worst_idx][1] or 0)
+        rem = total_selected - other_sum
+        if rem > 0:
+            parsed[worst_idx] = (parsed[worst_idx][0], rem, 1.0)
 
     result: Dict[str, int] = {}
     for rarity, val, _ in parsed:
@@ -305,11 +326,14 @@ def parse_ocr_items(
 
             if screen_type == "pet_merge":
                 visible["fusion_pets"] = selected_amt
-                rarities = _extract_pet_rarities(image, xp_y, selected_amt)
+                rarities = _extract_merge_rarities(image, xp_y, selected_amt)
                 if rarities:
                     secret["egg_rarity_json"] = json.dumps(rarities)
             else:
                 visible["fusion_montures"] = selected_amt
+                rarities = _extract_merge_rarities(image, xp_y, selected_amt)
+                if rarities:
+                    secret["mount_rarity_json"] = json.dumps(rarities)
             return {"screen_type": screen_type, "visible": visible, "secret": secret}
 
     # 2. FORGE PROBABILITIES MODAL — Universal signature: >= 8 percentage boxes in two right columns (current & next level)

@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import datetime
 from typing import Dict, Any, Optional, Union
@@ -5,6 +6,34 @@ import discord
 
 import db
 import war_points
+
+RARITY_DISPLAY = [
+    ("commun",     "⚪", "Commun"),
+    ("rare",       "🔵", "Rare"),
+    ("epique",     "🟢", "Épique"),
+    ("legendaire", "🟡", "Légendaire"),
+    ("ultime",     "🔴", "Ultime"),
+    ("mythique",   "🟣", "Mythique"),
+    ("heroique",   "🟠", "Héroïque"),
+    ("infini",     "🩵", "Infini"),
+    ("eternel",    "⭐", "Éternel"),
+]
+
+
+def _format_rarity_lines(rarity_json: str, total: int) -> str:
+    try:
+        data = json.loads(rarity_json or "{}")
+    except (TypeError, ValueError):
+        data = {}
+    if isinstance(data, dict) and data:
+        lines = []
+        for key, dot, label in RARITY_DISPLAY:
+            cnt = int(data.get(key) or 0)
+            if cnt > 0:
+                lines.append(f"• {dot} **{label} :** `{db.format_amount(cnt)}`")
+        if lines:
+            return "\n".join(lines)
+    return f"• **Total :** `{db.format_amount(total)}`"
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 GAME_ICON_URL = (
@@ -90,13 +119,18 @@ def build_profile_embed(
     )
     embed.set_thumbnail(url=GAME_ICON_URL)
 
+    fusion_m = int(profile.get("fusion_montures") or 0)
+    fusion_p = int(profile.get("fusion_pets") or 0)
+
     embed.add_field(
-        name="Fusions disponibles",
-        value=(
-            f"• {e('fm_mount_merge')} **Montures :** `{fmt('fusion_montures')}`\n"
-            f"• {e('fm_pet_merge')} **Pets :** `{fmt('fusion_pets')}`"
-        ),
-        inline=False,
+        name=f"{e('fm_mount_merge')} Fusion Montures (`{db.format_amount(fusion_m)}`)",
+        value=_format_rarity_lines(profile.get("mount_rarity_json") or "{}", fusion_m),
+        inline=True,
+    )
+    embed.add_field(
+        name=f"{e('fm_pet_merge')} Fusion Pets (`{db.format_amount(fusion_p)}`)",
+        value=_format_rarity_lines(profile.get("egg_rarity_json") or "{}", fusion_p),
+        inline=True,
     )
 
     potentials = war_points.get_today_and_tomorrow_potentials(profile, now=now)

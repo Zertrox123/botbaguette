@@ -126,6 +126,9 @@ async def scan(
 
     lines = []
     for key, val in merged_visible.items():
+        if key == "puissance":
+            lines.append(f"• ⚔️ **Puissance :** `{val}`")
+            continue
         lbl, icon_key = FIELD_LABELS.get(key, (key, "fm_hammer"))
         em = profile_ui.emoji_str(emoji_map, icon_key)
         lines.append(f"• {em} **{lbl} :** `{db.format_amount(int(val))}`")

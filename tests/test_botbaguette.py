@@ -196,6 +196,23 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
         ])
         self.assertEqual(res_pet["visible"], {"fusion_pets": 949})
 
+        # Main screen with player power ('￥369b' -> '369b')
+        res_main = scanner.parse_ocr_items([
+            mk("Plolipop", 0.23, 0.09),
+            mk("￥369b", 0.24, 0.11),
+            mk("Forge", 0.73, 0.76),
+            mk("Niveau32", 0.74, 0.77),
+            mk("181032", 0.51, 0.80),
+        ])
+        self.assertEqual(res_main["visible"], {"puissance": "369b", "marteaux": 181032})
+
+        embed_with_power = profile_ui.build_profile_embed(
+            {"pseudo": "Plolipop", "puissance": "369b"},
+            "Plolipop",
+            emoji_map={},
+        )
+        self.assertEqual(embed_with_power.title, "Plolipop — 369b")
+
 
 if __name__ == "__main__":
     unittest.main()

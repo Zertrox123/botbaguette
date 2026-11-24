@@ -41,6 +41,23 @@ def _extract_amount(text: str) -> Optional[int]:
         return None
 
 
+def _extract_player_power(items: List[Dict[str, Any]]) -> Optional[str]:
+    """Extract player power (e.g. '369b') from top-left profile badge on main/mounts screens."""
+    candidates = [
+        it for it in items
+        if 0.14 <= it["cx"] <= 0.42 and 0.095 <= it["cy"] <= 0.14
+    ]
+    candidates.sort(key=lambda it: it["cy"])
+    for it in candidates:
+        cleaned = re.sub(r"^[^0-9]+", "", it["text"].strip())
+        if re.fullmatch(r"[0-9]+(?:[.,][0-9]+)?\s*[a-z]{0,2}", cleaned, re.IGNORECASE):
+            try:
+                return db.normalize_power(cleaned)
+            except ValueError:
+                continue
+    return None
+
+
 def _forge_level_to_tiers(forge_level: int) -> Tuple[int, int]:
     """Map Forge level to (J1 points, J3/J5 points) per hammer."""
     if forge_level >= 15:
@@ -193,12 +210,18 @@ def parse_ocr_items(items: List[Dict[str, Any]]) -> Dict[str, Any]:
         cost = _find_summon_cost(items)
         if cost is not None:
             secret["mount_summon_cost"] = cost
+        power = _extract_player_power(items)
+        if power:
+            visible["puissance"] = power
         return {"screen_type": screen_type, "visible": visible, "secret": secret}
 
     # 6. Main Forge screen ("Forge" + "Niveau XX" + hammers on anvil)
     forge_hdr = next((it for it in items if it["norm"] == "forge" and 0.65 <= it["cy"] <= 0.85), None)
     if forge_hdr is not None:
         screen_type = "main"
+        power = _extract_player_power(items)
+        if power:
+            visible["puissance"] = power
         # Hammers count sits near center (x ~ 0.35..0.65, y ~ 0.74..0.85)
         anvil_nums = [
             it for it in items

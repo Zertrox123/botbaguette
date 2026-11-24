@@ -8,6 +8,7 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "botbaguette.
 
 DEFAULT_PROFILE: Dict[str, Any] = {
     "pseudo": "",
+    "puissance": "",
     "marteaux": 0,
     "competences": 0,
     "cles_monture": 0,
@@ -37,6 +38,18 @@ _SUFFIXES = {
 }
 
 _AMOUNT_RE = re.compile(r"^\s*([0-9]+(?:[.,][0-9]+)?)\s*([kmbt])?\s*$", re.IGNORECASE)
+_POWER_RE = re.compile(r"([0-9]+(?:[.,][0-9]+)?)\s*([a-z]{1,2})?", re.IGNORECASE)
+
+
+def normalize_power(raw: str) -> str:
+    """Clean OCR/user power strings like '￥369b' or '1.25 t' into '369b' / '1.25t'."""
+    cleaned = re.sub(r"^[^0-9]+", "", raw.strip()).replace(",", ".")
+    m = _POWER_RE.match(cleaned)
+    if not m:
+        raise ValueError("Format de puissance invalide (ex: `369b`, `1.25t`).")
+    num = m.group(1)
+    unit = (m.group(2) or "").lower()
+    return f"{num}{unit}"
 
 
 def parse_amount(raw: str) -> int:
@@ -76,6 +89,7 @@ def init_db(db_path: Optional[str] = None) -> None:
             CREATE TABLE IF NOT EXISTS profiles (
                 user_id INTEGER PRIMARY KEY,
                 pseudo TEXT DEFAULT '',
+                puissance TEXT DEFAULT '',
                 marteaux INTEGER DEFAULT 0,
                 competences INTEGER DEFAULT 0,
                 cles_monture INTEGER DEFAULT 0,
@@ -97,6 +111,7 @@ def init_db(db_path: Optional[str] = None) -> None:
         )
         # Safe migrations for existing databases
         migrations = [
+            ("puissance", "TEXT DEFAULT ''"),
             ("fioles_vertes", "INTEGER DEFAULT 0"),
             ("fusion_montures", "INTEGER DEFAULT 0"),
             ("fusion_pets", "INTEGER DEFAULT 0"),

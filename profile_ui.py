@@ -70,11 +70,13 @@ def build_profile_embed(
     now: Optional[datetime] = None,
 ) -> discord.Embed:
     pseudo = profile.get("pseudo") or display_name
+    puissance = (profile.get("puissance") or "").strip()
+    title = f"{pseudo} — {puissance}" if puissance else pseudo
     e = lambda k: emoji_str(emoji_map, k)
     fmt = lambda k: db.format_amount(int(profile.get(k) or 0))
 
     embed = discord.Embed(
-        title=f"Profil — {pseudo}",
+        title=title,
         color=discord.Color.from_rgb(230, 126, 34),
         description=(
             "\u200b\n"

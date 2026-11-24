@@ -59,23 +59,87 @@ FIELD_LABELS = {
 }
 
 
+def build_scan_preview_embed(visible: Dict[str, object], has_secret: bool = False) -> discord.Embed:
+    lines = []
+    for key, val in visible.items():
+        if key == "puissance":
+            lines.append(f"• ⚔️ **Puissance :** `{val}`")
+            continue
+        lbl, icon_key = FIELD_LABELS.get(key, (key, "fm_hammer"))
+        em = profile_ui.emoji_str(emoji_map, icon_key)
+        lines.append(f"• {em} **{lbl} :** `{db.format_amount(int(val))}`")
+
+    if not lines and has_secret:
+        lines.append("• Calibration interne détectée (enregistrée en secret).")
+
+    embed = discord.Embed(
+        title="Aperçu du scan",
+        color=discord.Color.from_rgb(52, 152, 219),
+        description="\u200b\n" + "\n".join(lines),
+    )
+    embed.set_footer(text="Vérifie les valeurs détectées puis clique sur Appliquer ou Corriger.")
+    return embed
+
+
+class ScanCorrectionModal(discord.ui.Modal):
+    def __init__(self, view: "ScanConfirmView"):
+        super().__init__(title="Corriger les valeurs scannées")
+        self.scan_view = view
+        self.inputs: Dict[str, discord.ui.TextInput] = {}
+        # Discord modals support up to 5 TextInput fields
+        for key in list(view.visible.keys())[:5]:
+            val = view.visible[key]
+            lbl = "Puissance" if key == "puissance" else FIELD_LABELS.get(key, (key, ""))[0]
+            ti = discord.ui.TextInput(
+                label=lbl,
+                default=str(val),
+                required=True,
+                max_length=25,
+            )
+            self.inputs[key] = ti
+            self.add_item(ti)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        new_visible = dict(self.scan_view.visible)
+        try:
+            for key, ti in self.inputs.items():
+                if key == "puissance":
+                    new_visible[key] = db.normalize_power(ti.value)
+                else:
+                    new_visible[key] = db.parse_amount(ti.value)
+        except ValueError as err:
+            return await interaction.response.send_message(f"❌ {err}", ephemeral=True)
+
+        self.scan_view.visible = new_visible
+        embed = build_scan_preview_embed(self.scan_view.visible, has_secret=bool(self.scan_view.secret))
+        await interaction.response.edit_message(embed=embed, view=self.scan_view)
+
+
 class ScanConfirmView(discord.ui.View):
-    def __init__(self, user_id: int, updates: Dict[str, object]):
+    def __init__(self, user_id: int, visible: Dict[str, object], secret: Dict[str, object]):
         super().__init__(timeout=180)
         self.user_id = user_id
-        self.updates = updates
+        self.visible = visible
+        self.secret = secret
+        if not visible:
+            self.correct.disabled = True
 
     @discord.ui.button(label="Appliquer au profil", emoji="✅", style=discord.ButtonStyle.success)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("❌ Ce scan ne t'appartient pas.", ephemeral=True)
-        payload = dict(self.updates)
-        payload["pseudo"] = interaction.user.display_name
+        payload = {**self.visible, **self.secret, "pseudo": interaction.user.display_name}
         profile = db.update_profile(self.user_id, payload)
         embed = profile_ui.build_profile_embed(profile, interaction.user.display_name, emoji_map, can_edit=True)
         view = profile_ui.ProfileView(self.user_id, emoji_map)
         self.stop()
         await interaction.response.edit_message(content="✅ Profil mis à jour via `/scan` !", embed=embed, view=view)
+
+    @discord.ui.button(label="Correction", emoji="✏️", style=discord.ButtonStyle.primary)
+    async def correct(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ Ce scan ne t'appartient pas.", ephemeral=True)
+        await interaction.response.send_modal(ScanCorrectionModal(self))
 
     @discord.ui.button(label="Annuler", emoji="❌", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -124,27 +188,8 @@ async def scan(
             ephemeral=True,
         )
 
-    lines = []
-    for key, val in merged_visible.items():
-        if key == "puissance":
-            lines.append(f"• ⚔️ **Puissance :** `{val}`")
-            continue
-        lbl, icon_key = FIELD_LABELS.get(key, (key, "fm_hammer"))
-        em = profile_ui.emoji_str(emoji_map, icon_key)
-        lines.append(f"• {em} **{lbl} :** `{db.format_amount(int(val))}`")
-
-    if not lines and merged_secret:
-        lines.append("• Calibration interne détectée (enregistrée en secret).")
-
-    embed = discord.Embed(
-        title="Aperçu du scan",
-        color=discord.Color.from_rgb(52, 152, 219),
-        description="\u200b\n" + "\n".join(lines),
-    )
-    embed.set_footer(text="Vérifie les valeurs détectées puis clique sur Appliquer.")
-
-    all_updates = {**merged_visible, **merged_secret}
-    view = ScanConfirmView(interaction.user.id, all_updates)
+    embed = build_scan_preview_embed(merged_visible, has_secret=bool(merged_secret))
+    view = ScanConfirmView(interaction.user.id, merged_visible, merged_secret)
     await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 

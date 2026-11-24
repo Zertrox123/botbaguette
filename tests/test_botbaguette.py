@@ -213,6 +213,20 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(embed_with_power.title, "Plolipop — 369b")
 
+    async def test_scan_correction_modal(self):
+        import command as bot_cmd
+
+        view = bot_cmd.ScanConfirmView(1001, {"puissance": "369b", "marteaux": 181032}, {"forge_tier_j1": 5})
+        modal = bot_cmd.ScanCorrectionModal(view)
+        modal.inputs["puissance"]._value = "400b"
+        modal.inputs["marteaux"]._value = "185k"
+
+        inter = self._mock_interaction(1001, "Plolipop")
+        await modal.on_submit(inter)
+        inter.response.edit_message.assert_awaited_once()
+        self.assertEqual(view.visible["puissance"], "400b")
+        self.assertEqual(view.visible["marteaux"], 185000)
+
 
 if __name__ == "__main__":
     unittest.main()

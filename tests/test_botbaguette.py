@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import db
 import profile_ui
+import scanner
 import war_points
 
 
@@ -155,6 +156,45 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
         pair = war_points.get_today_and_tomorrow_potentials(sample, now=mon)
         self.assertIsNone(pair[0]["war_day"])
         self.assertEqual(pair[1]["war_day"], 1)
+
+    async def test_scanner_parse_ocr_items(self):
+        def mk(text, cx, cy):
+            return {"text": text, "norm": scanner._norm(text), "cx": cx, "cy": cy, "conf": 0.99}
+
+        # Tech tree with merged header
+        res_tech = scanner.parse_ocr_items([
+            mk("75.1kArbreTechnologiqu", 0.35, 0.10),
+            mk("93", 0.20, 0.15),
+            mk("57.4%(Termine)", 0.27, 0.33),
+        ])
+        self.assertEqual(res_tech["screen_type"], "tech_tree")
+        self.assertEqual(res_tech["visible"], {"potions": 75100, "fioles_vertes": 93})
+        self.assertIn("57.4", res_tech["secret"]["tech_tree_json"])
+
+        # Skills screen with x5 summon cost
+        res_skills = scanner.parse_ocr_items([
+            mk("568", 0.19, 0.10),
+            mk("competences18/18", 0.50, 0.10),
+            mk("Invoquerx5", 0.50, 0.72),
+            mk("186", 0.54, 0.75),
+        ])
+        self.assertEqual(res_skills["screen_type"], "skills")
+        self.assertEqual(res_skills["visible"], {"competences": 568})
+        self.assertEqual(res_skills["secret"], {"skill_summon_cost": 37.2})
+
+        # Mount merge vs Pet merge
+        res_mnt = scanner.parse_ocr_items([
+            mk("697selectionne", 0.25, 0.32),
+            mk("Ameliorer", 0.80, 0.32),
+        ])
+        self.assertEqual(res_mnt["visible"], {"fusion_montures": 697})
+
+        res_pet = scanner.parse_ocr_items([
+            mk("Animaux", 0.50, 0.10),
+            mk("949selectionne", 0.25, 0.32),
+            mk("Ameliorer", 0.80, 0.31),
+        ])
+        self.assertEqual(res_pet["visible"], {"fusion_pets": 949})
 
 
 if __name__ == "__main__":

@@ -3,10 +3,11 @@ import json
 import re
 import unicodedata
 from typing import Dict, Any, List, Optional, Tuple
-from PIL import Image, ImageEnhance, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageOps
 from rapidocr_onnxruntime import RapidOCR
 
 import db
+import war_points
 
 _OCR_ENGINE: Optional[RapidOCR] = None
 
@@ -80,13 +81,118 @@ def _extract_player_power(items: List[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
+def _classify_rarity_rgb(rgb: Tuple[int, int, int]) -> str:
+    """Classify a Forge Master pet/egg filter tile background color into a rarity key."""
+    r, g, b = rgb
+    spread = max(r, g, b) - min(r, g, b)
+    if spread <= 9:
+        return "commun"
+    # Yellow (Légendaire): high R & G, lower B
+    if r > b + 12 and g > b + 12 and abs(r - g) <= 14:
+        return "legendaire"
+    # Purple / Violet (Mythique): R & B higher than G
+    if r > g + 10 and b > g + 10:
+        return "mythique"
+    # Pink / Red (Ultime / Héroïque): R dominates both G and B
+    if r > g + 12 and r > b + 12:
+        return "heroique" if (r - g) > 45 else "ultime"
+    # Green (Épique): G dominates R and B
+    if g > r + 8 and g > b + 8:
+        return "epique"
+    # Blue (Rare): B dominates both R and G
+    if b > r + 10 and b >= g:
+        return "rare"
+    # Cyan / Teal (Infini): strong G & B, very low R
+    if g > r + 25 and b > r + 25:
+        return "infini"
+    return "commun"
+
+
+def _extract_pet_rarities(
+    im: Optional[Image.Image],
+    xp_y: float,
+    total_selected: int,
+) -> Dict[str, int]:
+    """
+    Extract per-rarity pet/egg counts from the filter tile row below the XP bar on pet_merge screens.
+    Language-independent: uses tile RGB colors + circular-ring-masked badge OCR + exact total reconciliation.
+    """
+    if im is None:
+        return {}
+    w, h = im.size
+    y_mid = min(h - 1, max(0, int(h * (xp_y + 0.122))))
+    spans: List[Tuple[int, int]] = []
+    in_tile = False
+    start = 0
+    for x in range(int(w * 0.06), int(w * 0.94)):
+        r, g, b = im.getpixel((x, y_mid))
+        is_bg = (r > 246 and g > 246 and b > 246)
+        if not is_bg and not in_tile:
+            in_tile, start = True, x
+        elif is_bg and in_tile:
+            in_tile = False
+            if x - start >= int(w * 0.05):
+                spans.append((start, x))
+
+    if not spans:
+        return {}
+
+    parsed: List[Tuple[str, Optional[int], str]] = []
+    for x0, x1 in spans:
+        tw = x1 - x0
+        cx_t = (x0 + x1) // 2
+        # Detect top & bottom of this tile dynamically (independent of aspect ratio)
+        y_top = y_mid
+        while y_top > 0 and min(im.getpixel((cx_t, y_top))) < 246:
+            y_top -= 1
+        y_bot = y_mid
+        while y_bot < h - 1 and min(im.getpixel((cx_t, y_bot))) < 246:
+            y_bot += 1
+        cy_sample = min(h - 1, y_top + max(3, (y_bot - y_top) // 6))
+        rarity = _classify_rarity_rgb(im.getpixel((cx_t, cy_sample)))
+
+        bcx = int(x1 - tw * 0.01)
+        bcy = int(y_bot - 1)
+        rad = max(7, int(tw * 0.24))
+        crop = im.crop((max(0, bcx - rad), max(0, bcy - rad), min(w, bcx + rad), min(h, bcy + rad)))
+        big = crop.resize((120, 120), Image.Resampling.LANCZOS)
+        mask = Image.new("L", (120, 120), 0)
+        ImageDraw.Draw(mask).ellipse((16, 16, 104, 104), fill=255)
+        clean = Image.new("RGB", (160, 160), (255, 255, 255))
+        clean.paste(big, (20, 20), mask)
+        clean = ImageEnhance.Contrast(clean).enhance(1.5)
+
+        res, _ = _get_ocr()(clean)
+        val: Optional[int] = None
+        raw_txt = ""
+        for _, txt, conf in (res or []):
+            t = _fix_digit_typos(txt.strip())
+            raw_txt = t
+            if t.isdigit() and float(conf) >= 0.60:
+                val = int(t)
+                break
+        parsed.append((rarity, val, raw_txt))
+
+    # Reconcile if exactly 1 tile was partially read and we know total_selected
+    missing_idxs = [i for i, (_, v, _) in enumerate(parsed) if v is None]
+    known_sum = sum(v for _, v, _ in parsed if v is not None)
+    if len(missing_idxs) == 1 and total_selected >= known_sum:
+        idx = missing_idxs[0]
+        rem = total_selected - known_sum
+        rarity, _, _ = parsed[idx]
+        parsed[idx] = (rarity, rem, str(rem))
+
+    result: Dict[str, int] = {}
+    for rarity, val, _ in parsed:
+        if val is not None and val > 0:
+            result[rarity] = result.get(rarity, 0) + val
+    return result
+
+
 def _forge_level_to_tiers(forge_level: int) -> Tuple[int, int]:
-    """Map Forge level to (J1 points, J3/J5 points) per hammer."""
-    if forge_level >= 15:
-        return 5, 4
-    if forge_level >= 7:
-        return 4, 3
-    return 2, 1
+    """Map Forge level (0..35) to integer (J1, J3/J5) fallback points per hammer."""
+    avg_j1, avg_j3 = war_points.forge_level_to_avg_points(forge_level)
+    return int(round(avg_j1)), int(round(avg_j3))
 
 
 def _find_summon_cost(items: List[Dict[str, Any]], y_min: float = 0.45, y_max: float = 0.85) -> Optional[float]:
@@ -199,11 +305,54 @@ def parse_ocr_items(
 
             if screen_type == "pet_merge":
                 visible["fusion_pets"] = selected_amt
+                rarities = _extract_pet_rarities(image, xp_y, selected_amt)
+                if rarities:
+                    secret["egg_rarity_json"] = json.dumps(rarities)
             else:
                 visible["fusion_montures"] = selected_amt
             return {"screen_type": screen_type, "visible": visible, "secret": secret}
 
-    # 2. TECH TREE — Universal signature: >= 2 percentage cards ('57.4%', '9.55%', '27.6%', '7.66%') in middle band
+    # 2. FORGE PROBABILITIES MODAL — Universal signature: >= 8 percentage boxes in two right columns (current & next level)
+    #    and two level headers side-by-side at y ~ 0.22..0.28 ('Niveau 32' | 'Niveau 33', works in FR/EN/ES/DE)
+    forge_prob_cols = [
+        (it["cy"], it["cx"], float(_PCT_RE.search(it["text"]).group(1).replace(",", ".")))
+        for it in items
+        if 0.25 <= it["cy"] <= 0.68 and 0.55 <= it["cx"] <= 0.96 and _PCT_RE.search(it["text"])
+    ]
+    if len(forge_prob_cols) >= 8:
+        screen_type = "forge_info"
+        power = _extract_player_power(items)
+        if power:
+            visible["puissance"] = power
+        # Current Forge level sits at x ~ 0.50..0.75, y ~ 0.22..0.28 (0..35)
+        lvl_headers = [
+            it for it in items
+            if 0.50 <= it["cx"] <= 0.76 and 0.22 <= it["cy"] <= 0.28 and _LAST_INT_RE.search(it["norm"])
+        ]
+        if lvl_headers:
+            lvl = max(0, min(35, int(_LAST_INT_RE.search(lvl_headers[0]["norm"]).group(1))))
+            secret["forge_level"] = lvl
+        # Current-level probability column sits at x ~ 0.55..0.76, sorted top-to-bottom (rows 0..2=+2/+1, 3..5=+4/+3, 6+=+5/+4)
+        cur_col = sorted([p for p in forge_prob_cols if p[1] <= 0.76], key=lambda p: p[0])
+        total_pct = sum(p[2] for p in cur_col)
+        if total_pct > 0:
+            w_j1 = 0.0
+            w_j3 = 0.0
+            for idx, (_, _, pct) in enumerate(cur_col):
+                p_j1, p_j3 = (2, 1) if idx < 3 else ((4, 3) if idx < 6 else (5, 4))
+                w_j1 += pct * p_j1
+                w_j3 += pct * p_j3
+            secret["forge_avg_j1"] = round(w_j1 / total_pct, 2)
+            secret["forge_avg_j3"] = round(w_j3 / total_pct, 2)
+            secret["forge_tier_j1"] = int(round(secret["forge_avg_j1"]))
+            secret["forge_tier_j3"] = int(round(secret["forge_avg_j3"]))
+        elif "forge_level" in secret:
+            avg_j1, avg_j3 = war_points.forge_level_to_avg_points(secret["forge_level"])
+            secret["forge_avg_j1"] = avg_j1
+            secret["forge_avg_j3"] = avg_j3
+        return {"screen_type": screen_type, "visible": visible, "secret": secret}
+
+    # 3. TECH TREE — Universal signature: 2..6 percentage cards ('57.4%', '9.55%', '27.6%', '7.66%') in middle band
     pct_boxes = []
     for it in items:
         if 0.22 <= it["cy"] <= 0.65:
@@ -322,14 +471,18 @@ def parse_ocr_items(
         amt = _extract_amount(anvil_nums[0]["text"])
         if amt is not None:
             visible["marteaux"] = amt
-        # Secret Forge level: any box with a trailing integer inside the right blue Forge button
+        # Secret Forge level (0..35): any box with a trailing integer inside the right blue Forge button
         for it in items:
             if 0.62 <= it["cx"] <= 0.86 and 0.74 <= it["cy"] <= 0.82:
                 lm = _LAST_INT_RE.search(it["norm"])
                 if lm:
-                    j1, j3 = _forge_level_to_tiers(int(lm.group(1)))
-                    secret["forge_tier_j1"] = j1
-                    secret["forge_tier_j3"] = j3
+                    lvl = max(0, min(35, int(lm.group(1))))
+                    avg_j1, avg_j3 = war_points.forge_level_to_avg_points(lvl)
+                    secret["forge_level"] = lvl
+                    secret["forge_avg_j1"] = avg_j1
+                    secret["forge_avg_j3"] = avg_j3
+                    secret["forge_tier_j1"] = int(round(avg_j1))
+                    secret["forge_tier_j3"] = int(round(avg_j3))
                     break
         return {"screen_type": screen_type, "visible": visible, "secret": secret}
 
@@ -340,12 +493,12 @@ def scan_image_bytes(data: bytes) -> Dict[str, Any]:
     """Run local RapidOCR with upscaling + high-contrast fallback on raw image bytes."""
     raw_im = Image.open(io.BytesIO(data)).convert("RGB")
     im = _preprocess_image(raw_im)
-    res = parse_ocr_items(_ocr_to_items(im), image=im)
+    res = parse_ocr_items(_ocr_to_items(im), image=raw_im)
 
-    if res["screen_type"] == "unknown" or not res["visible"]:
+    if res["screen_type"] == "unknown" or (not res["visible"] and not res["secret"]):
         boosted = ImageOps.autocontrast(im, cutoff=1)
         boosted = ImageEnhance.Contrast(boosted).enhance(1.35)
-        res2 = parse_ocr_items(_ocr_to_items(boosted), image=im)
-        if res2["screen_type"] != "unknown" and len(res2["visible"]) >= len(res["visible"]):
+        res2 = parse_ocr_items(_ocr_to_items(boosted), image=raw_im)
+        if res2["screen_type"] != "unknown" and (len(res2["visible"]) + len(res2["secret"])) >= (len(res["visible"]) + len(res["secret"])):
             return res2
     return res

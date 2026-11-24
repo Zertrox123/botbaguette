@@ -208,7 +208,31 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
             mk("18l032", 0.51, 0.80),
         ])
         self.assertEqual(res_main["visible"], {"puissance": "369b", "marteaux": 181032})
-        self.assertEqual(res_main["secret"], {"forge_tier_j1": 5, "forge_tier_j3": 4})
+        self.assertEqual(res_main["secret"]["forge_level"], 32)
+        self.assertEqual(res_main["secret"]["forge_avg_j1"], 5.0)
+        self.assertEqual(res_main["secret"]["forge_avg_j3"], 4.0)
+
+        # Forge probabilities modal (0..35) with mixed probabilities (50% early, 50% modern -> avg 3.0 / 2.0)
+        res_finfo = scanner.parse_ocr_items([
+            mk("Level 10", 0.63, 0.25),
+            mk("Level 11", 0.86, 0.25),
+            mk("50%", 0.67, 0.29), mk("40%", 0.90, 0.29),
+            mk("0%",  0.67, 0.33), mk("0%",  0.90, 0.33),
+            mk("0%",  0.67, 0.36), mk("0%",  0.90, 0.36),
+            mk("50%", 0.67, 0.40), mk("60%", 0.90, 0.40),
+        ])
+        self.assertEqual(res_finfo["screen_type"], "forge_info")
+        self.assertEqual(res_finfo["secret"]["forge_level"], 10)
+        self.assertEqual(res_finfo["secret"]["forge_avg_j1"], 3.0)
+        self.assertEqual(res_finfo["secret"]["forge_avg_j3"], 2.0)
+
+        # Weighted egg hatch points from real rarity distribution
+        avg_hatch = war_points.expected_egg_hatch_points(
+            '{"commun": 211, "rare": 309, "epique": 319, "legendaire": 107, "ultime": 3}'
+        )
+        self.assertAlmostEqual(avg_hatch, 2447.63, places=2)
+        self.assertEqual(war_points.forge_level_to_avg_points(0), (2.0, 1.0))
+        self.assertEqual(war_points.forge_level_to_avg_points(35), (5.0, 4.0))
 
         # Animals screen in German (pure timers + '+1', zero French/English keywords!)
         res_de_animals = scanner.parse_ocr_items([

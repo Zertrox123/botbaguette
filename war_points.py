@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -47,6 +48,52 @@ MOUNT_SUMMON_COST = 50      # 48-50 clés par invocation
 EGG_SUMMON_COST = 100       # 100 coquilles par œuf invoqué
 EGG_MIN_HATCH_PTS = 400     # Minimum garanti (œuf Commun = +400, jusqu'à +65 000 Éternel)
 
+EGG_RARITY_HATCH_PTS: Dict[str, int] = {
+    "commun": 400,
+    "rare": 1600,
+    "epique": 3200,
+    "legendaire": 6400,
+    "ultime": 12800,
+    "mythique": 25600,
+    "heroique": 33000,
+    "infini": 45000,
+    "eternel": 65000,
+}
+
+
+def forge_level_to_avg_points(forge_level: int) -> Tuple[float, float]:
+    """Estime (pts moyen J1, pts moyen J3/J5) par marteau selon le niveau de Forge (0..35)."""
+    lvl = max(0, min(35, int(forge_level)))
+    if lvl <= 6:
+        return 2.0, 1.0
+    if lvl <= 14:
+        ratio = (lvl - 6) / 8.0
+        return round(2.0 + 2.0 * ratio, 2), round(1.0 + 2.0 * ratio, 2)
+    if lvl <= 24:
+        ratio = (lvl - 14) / 10.0
+        return round(4.0 + 1.0 * ratio, 2), round(3.0 + 1.0 * ratio, 2)
+    return 5.0, 4.0
+
+
+def expected_egg_hatch_points(egg_rarity_json: str) -> float:
+    """Calcule l'espérance de points d'éclosion d'œuf à partir des raretés scannées en backend."""
+    try:
+        counts = json.loads(egg_rarity_json or "{}")
+    except (TypeError, ValueError):
+        return float(EGG_MIN_HATCH_PTS)
+    if not isinstance(counts, dict) or not counts:
+        return float(EGG_MIN_HATCH_PTS)
+    total_count = 0
+    weighted_sum = 0
+    for rarity, cnt in counts.items():
+        pts = EGG_RARITY_HATCH_PTS.get(str(rarity).lower())
+        if pts and isinstance(cnt, (int, float)) and cnt > 0:
+            total_count += int(cnt)
+            weighted_sum += int(cnt) * pts
+    if total_count <= 0:
+        return float(EGG_MIN_HATCH_PTS)
+    return round(weighted_sum / total_count, 2)
+
 
 def get_day_info(dt: datetime) -> Tuple[Optional[int], str]:
     """Retourne (numéro de jour de guerre 1..5 ou None, nom du jour en FR)."""
@@ -74,14 +121,15 @@ def compute_day_potential(profile: Dict[str, Any], war_day: Optional[int]) -> Tu
     skill_cost = max(1.0, float(profile.get("skill_summon_cost") or SKILL_SUMMON_COST))
     mount_cost = max(1.0, float(profile.get("mount_summon_cost") or MOUNT_SUMMON_COST))
     egg_cost = max(1.0, float(profile.get("egg_summon_cost") or EGG_SUMMON_COST))
-    forge_pts_j1 = int(profile.get("forge_tier_j1") or 5)
-    forge_pts_j3 = int(profile.get("forge_tier_j3") or 4)
+    forge_avg_j1 = float(profile.get("forge_avg_j1") or profile.get("forge_tier_j1") or 5.0)
+    forge_avg_j3 = float(profile.get("forge_avg_j3") or profile.get("forge_tier_j3") or 4.0)
+    avg_egg_pts = expected_egg_hatch_points(profile.get("egg_rarity_json") or "{}")
 
     breakdown: List[Tuple[str, int]] = []
 
     if war_day == 1:
         # J1 (Mardi) : Forge + Invocation compétence (+225)
-        pts_forge = marteaux * forge_pts_j1
+        pts_forge = int(round(marteaux * forge_avg_j1))
         pts_skills = int(competences // skill_cost) * 225
         if pts_forge:
             breakdown.append(("fm_hammer", pts_forge))
@@ -98,10 +146,10 @@ def compute_day_potential(profile: Dict[str, Any], war_day: Optional[int]) -> Tu
             breakdown.append(("fm_mount_merge", pts_mount_merge))
 
     elif war_day == 3:
-        # J3 (Jeudi) : Forge + Compétence (+175) + Éclosion œuf (+400 mini) + Fusion pet (+1250)
-        pts_forge = marteaux * forge_pts_j3
+        # J3 (Jeudi) : Forge + Compétence (+175) + Éclosion œuf (espérance raretés) + Fusion pet (+1250)
+        pts_forge = int(round(marteaux * forge_avg_j3))
         pts_skills = int(competences // skill_cost) * 175
-        pts_eggs = int(oeufs // egg_cost) * EGG_MIN_HATCH_PTS
+        pts_eggs = int(round((oeufs // egg_cost) * avg_egg_pts))
         pts_pet_merge = fusion_pets * 1250
         if pts_forge:
             breakdown.append(("fm_hammer", pts_forge))
@@ -122,9 +170,9 @@ def compute_day_potential(profile: Dict[str, Any], war_day: Optional[int]) -> Tu
             breakdown.append(("fm_mount_merge", pts_mount_merge))
 
     elif war_day == 5:
-        # J5 (Samedi) : Forge + Éclosion œuf (+400 mini) + Fusion pet (+1250)
-        pts_forge = marteaux * forge_pts_j3
-        pts_eggs = int(oeufs // egg_cost) * EGG_MIN_HATCH_PTS
+        # J5 (Samedi) : Forge + Éclosion œuf (espérance raretés) + Fusion pet (+1250)
+        pts_forge = int(round(marteaux * forge_avg_j3))
+        pts_eggs = int(round((oeufs // egg_cost) * avg_egg_pts))
         pts_pet_merge = fusion_pets * 1250
         if pts_forge:
             breakdown.append(("fm_hammer", pts_forge))

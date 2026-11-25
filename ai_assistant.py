@@ -150,12 +150,24 @@ def _build_system_prompt(author_name: str, db_ctx: str, code_ctx: str) -> str:
         f"La personne qui te parle actuellement s'appelle {author_name}.\n"
         "Règles strictes :\n"
         "- Tu AS accès en direct à toute la base de données dans DB PROFILS et à tout le code source du bot ci-dessous.\n"
-        "- Réponds en français, de façon claire, naturelle et concise : va droit au but avec les chiffres et explications utiles, sans pavé inutile ni formules de politesse superflues (ne répète jamais le pseudo entre crochets).\n"
+        "- Réponds en français, de façon claire, naturelle et concise : va droit au but avec les chiffres et explications utiles, sans pavé inutile ni formules de politesse superflues (ne répète jamais le pseudo entre crochets). Limite stricte : 1000 caractères maximum.\n"
         "- N'attribue JAMAIS les stats d'un joueur à un autre joueur.\n"
         "- Si un joueur n'apparaît pas dans DB PROFILS, dis simplement qu'il n'a pas encore enregistré son profil (/profil ou /scan).\n"
         "- N'invente jamais de chiffres absents de la DB.\n\n"
         f"{db_ctx}\n\n{code_ctx}"
     )
+
+
+MAX_REPLY_CHARS = 1000
+
+
+def _clamp_reply(text: str, limit: int = MAX_REPLY_CHARS) -> str:
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1].rsplit(" ", 1)[0]
+    if len(cut) < limit // 2:
+        cut = text[: limit - 1]
+    return cut.rstrip() + "…"
 
 
 def _format_input_with_history(author_name: str, prompt: str) -> str:
@@ -202,7 +214,7 @@ async def ask_local_ai(
                         txt = await resp.text()
                         return f"⚠️ Erreur `{AI_MODEL}` (HTTP {resp.status}) : `{txt[:200]}`"
                     data = await resp.json()
-                    reply = _extract_reply(data) or "*(Réponse vide du modèle)*"
+                    reply = _clamp_reply(_extract_reply(data) or "*(Réponse vide du modèle)*")
                     _CHAT_HISTORY.append({"role": "user", "content": f"({author_name}) {prompt}"})
                     _CHAT_HISTORY.append({"role": "assistant", "content": reply})
                     return reply

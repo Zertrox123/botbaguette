@@ -400,6 +400,7 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
             }),
             "Bonjour clan !",
         )
+        self.assertLessEqual(len(ai_assistant._clamp_reply("mot " * 400)), 1000)
 
         # Members page embed + /membre lookup by short_id
         found = db.get_profile_by_identifier(str(sid), db_path=self.db_path)

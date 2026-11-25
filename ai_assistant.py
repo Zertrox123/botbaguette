@@ -19,6 +19,18 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Mémoire courte des 6 derniers échanges (12 messages) du salon IA
 _CHAT_HISTORY: Deque[Dict[str, str]] = deque(maxlen=12)
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
+_CODE_BUDGETS = (None, 28000, 12000, 4000)
+_ACTIVE_BUDGET_IDX = 0
+_PRIORITY_FILES = (
+    "war_points.py",
+    "db.py",
+    "command.py",
+    "admin_ui.py",
+    "profile_ui.py",
+    "ai_assistant.py",
+    "scanner.py",
+    "client.py",
+)
 
 
 def build_database_context(db_path: Optional[str] = None) -> str:
@@ -71,11 +83,12 @@ def build_database_context(db_path: Optional[str] = None) -> str:
 
 def build_code_context(max_chars: Optional[int] = None) -> str:
     """Include the bot Python source code (excluding credential.py) as context."""
-    files = [
+    found = {
         os.path.basename(p)
-        for p in sorted(glob.glob(os.path.join(BASE_DIR, "*.py")))
+        for p in glob.glob(os.path.join(BASE_DIR, "*.py"))
         if os.path.basename(p) != "credential.py"
-    ]
+    }
+    files = [f for f in _PRIORITY_FILES if f in found] + sorted(found - set(_PRIORITY_FILES))
     chunks = ["=== CODE SOURCE DU BOT ==="]
     total = 0
     for name in files:
@@ -84,6 +97,9 @@ def build_code_context(max_chars: Optional[int] = None) -> str:
                 src = f.read()
         except OSError:
             continue
+        if max_chars is not None:
+            # Strip blank lines to pack more code into smaller context windows
+            src = "\n".join(ln for ln in src.splitlines() if ln.strip())
         entry = f"\n--- {name} ---\n{src}"
         if max_chars is not None and total + len(entry) > max_chars:
             rem = max_chars - total
@@ -159,23 +175,29 @@ async def ask_local_ai(
     db_path: Optional[str] = None,
 ) -> str:
     """Query the user-hosted LM Studio /api/v1/chat endpoint with full DB and code context."""
+    global _ACTIVE_BUDGET_IDX
     db_ctx = build_database_context(db_path=db_path)
-    full_code_ctx = build_code_context(max_chars=None)
     user_input = _format_input_with_history(author_name, prompt)
 
     timeout = aiohttp.ClientTimeout(total=180)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            # Try full DB + full code first; if server rejects context size (HTTP 400), retry with trimmed code.
-            for code_ctx in (full_code_ctx, build_code_context(max_chars=8000)):
+            # Automatically step down code budget if LM Studio's n_ctx is smaller than full codebase
+            for idx in range(_ACTIVE_BUDGET_IDX, len(_CODE_BUDGETS)):
+                code_ctx = build_code_context(max_chars=_CODE_BUDGETS[idx])
                 payload = {
                     "model": AI_MODEL,
                     "system_prompt": _build_system_prompt(author_name, db_ctx, code_ctx),
                     "input": user_input,
                 }
                 async with session.post(AI_URL, json=payload) as resp:
-                    if resp.status == 400 and code_ctx is full_code_ctx:
-                        continue
+                    if resp.status in (400, 500):
+                        txt = await resp.text()
+                        low = txt.lower()
+                        if idx + 1 < len(_CODE_BUDGETS) and ("context" in low or "n_ctx" in low or "n_keep" in low):
+                            _ACTIVE_BUDGET_IDX = idx + 1
+                            continue
+                        return f"⚠️ Erreur `{AI_MODEL}` (HTTP {resp.status}) : `{txt[:200]}`"
                     if resp.status != 200:
                         txt = await resp.text()
                         return f"⚠️ Erreur `{AI_MODEL}` (HTTP {resp.status}) : `{txt[:200]}`"

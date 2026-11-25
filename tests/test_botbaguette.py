@@ -83,7 +83,7 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
 
     async def test_view_and_modals_end_to_end(self):
         view = profile_ui.ProfileView(1001, emoji_map={}, db_path=self.db_path)
-        self.assertEqual(len(view.children), 8)
+        self.assertEqual(len(view.children), 9)
 
         # Stranger blocked
         stranger = self._mock_interaction(9999, "Intruder")
@@ -302,14 +302,16 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Snipers : 2", embed.description)
         self.assertIn("150 000", embed.description)  # Sniper individual points
 
-        # WarView "Profil" button opens caller's own profile ephemerally
-        war_view = profile_ui.WarView({}, db_path=self.db_path)
+        # ProfileView "War" button opens war embed ephemerally
+        pview = profile_ui.ProfileView(2, {}, db_path=self.db_path)
+        war_btn = next(c for c in pview.children if getattr(c, "custom_id", None) == "fm_open_war")
         inter = self._mock_interaction(2, "Glad1")
-        await war_view.open_profile.callback(inter)
+        inter.guild = None
+        await war_btn.callback(inter)
         inter.response.send_message.assert_awaited_once()
         kwargs = inter.response.send_message.call_args.kwargs
         self.assertTrue(kwargs.get("ephemeral"))
-        self.assertIn("Glad1", kwargs["embed"].title)
+        self.assertIn("Points Potentiels", kwargs["embed"].title)
         self.assertIn("200 000", embed.description)  # Total snipers (150k + 50k)
 
     async def test_admin_panel_ascension_filter_deductions_and_member(self):

@@ -41,8 +41,6 @@ AUTO_SCAN_CHANNEL_ID = 1522979872040030259
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
 @app_commands.describe(membre="Afficher le profil d'un autre membre du clan (optionnel)")
 async def profil(interaction: discord.Interaction, membre: Optional[discord.User] = None):
-    if not await admin_ui.check_admin_access(interaction):
-        return
     target = membre or interaction.user
     can_edit = target.id == interaction.user.id
     profile = db.get_or_create_profile(target.id, target.display_name)
@@ -261,6 +259,8 @@ WAR_MODE_CHOICES = [
 )
 @app_commands.choices(jour=WAR_DAY_CHOICES, mode=WAR_MODE_CHOICES)
 async def war(interaction: discord.Interaction, jour: Optional[int] = None, mode: Optional[str] = None):
+    if not await admin_ui.check_admin_access(interaction):
+        return
     if jour is None:
         today_day, _ = war_points.get_day_info(war_points.datetime.now(war_points.PARIS_TZ))
         jour = today_day or 1
@@ -278,7 +278,7 @@ async def war(interaction: discord.Interaction, jour: Optional[int] = None, mode
         resource_filter="all",
         ascension_only=(mode == "ascension"),
     )
-    await interaction.response.send_message(embed=embed, view=profile_ui.WarView(lambda: emoji_map))
+    await interaction.response.send_message(embed=embed)
 
 
 @bot.tree.command(name="admin", description="Ouvre le Panel Admin Stratégie de Guerre (format PC)")
@@ -371,7 +371,6 @@ async def on_ready():
     global emoji_map
     db.init_db()
     emoji_map = await profile_ui.sync_application_emojis(bot)
-    bot.add_view(profile_ui.WarView(lambda: emoji_map))
     print(f"Connecté en tant que {bot.user} ({len(emoji_map)}/{len(profile_ui.EMOJI_SPECS)} assets chargés)")
     try:
         synced = await bot.tree.sync()

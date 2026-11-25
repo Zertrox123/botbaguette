@@ -275,28 +275,6 @@ def build_war_embed(
     return embed
 
 
-class WarView(discord.ui.View):
-    def __init__(self, emoji_map_provider, db_path: Optional[str] = None):
-        super().__init__(timeout=None)
-        self._emoji_map_provider = emoji_map_provider
-        self.db_path = db_path
-
-    @discord.ui.button(
-        label="Profil",
-        emoji="👤",
-        style=discord.ButtonStyle.primary,
-        custom_id="war_open_profile",
-    )
-    async def open_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
-        emap = self._emoji_map_provider() if callable(self._emoji_map_provider) else self._emoji_map_provider
-        profile = db.get_or_create_profile(
-            interaction.user.id, interaction.user.display_name, db_path=self.db_path
-        )
-        embed = build_profile_embed(profile, interaction.user.display_name, emap, can_edit=True)
-        view = ProfileView(interaction.user.id, emap, db_path=self.db_path)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-
 class AmountModal(discord.ui.Modal):
     def __init__(
         self,
@@ -369,6 +347,33 @@ class ProfileView(discord.ui.View):
             )
             btn.callback = self._make_callback(field_key, label)
             self.add_item(btn)
+
+        war_btn = discord.ui.Button(
+            label="War",
+            emoji="⚔️",
+            style=discord.ButtonStyle.success,
+            row=2,
+            custom_id="fm_open_war",
+        )
+        war_btn.callback = self._open_war
+        self.add_item(war_btn)
+
+    async def _open_war(self, interaction: discord.Interaction):
+        today_day, _ = war_points.get_day_info(datetime.now(war_points.PARIS_TZ))
+        jour = today_day or 1
+        profiles = db.get_all_profiles(db_path=self.db_path)
+        sniper_ids = db.get_snipers(jour, db_path=self.db_path)
+        deductions = db.get_war_deductions(jour, db_path=self.db_path)
+        clan_name = interaction.guild.name if interaction.guild else "Baguette6"
+        embed = build_war_embed(
+            jour,
+            profiles,
+            sniper_ids,
+            self.emoji_map,
+            clan_name=clan_name,
+            deductions=deductions,
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     async def _check_owner(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:

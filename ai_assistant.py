@@ -12,7 +12,7 @@ import war_points
 
 AI_CHANNEL_ID = 1574928005959127173
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
-AI_MODEL = os.getenv("AI_MODEL", "qwen2.5:3b")
+AI_MODEL = os.getenv("AI_MODEL", "qwen3:1.7b")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Mémoire courte des 6 derniers échanges (12 messages) du salon IA
@@ -129,6 +129,7 @@ async def ask_local_ai(
     payload = {
         "model": AI_MODEL,
         "stream": False,
+        "think": False,
         "keep_alive": "30m",
         "options": {"num_predict": 350, "temperature": 0.25},
         "messages": messages,

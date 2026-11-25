@@ -636,10 +636,59 @@ def parse_war_leaderboard_items(items: List[Dict[str, Any]]) -> List[Tuple[str, 
     return results
 
 
-def scan_war_leaderboard_bytes(data: bytes) -> List[Tuple[str, int]]:
+def _detect_leaderboard_period(
+    im: Optional[Image.Image],
+    items: List[Dict[str, Any]],
+) -> Tuple[str, Optional[int]]:
+    """
+    Detect whether a Forge Master war leaderboard screenshot is 'daily' (Quotidien) or 'weekly' (Hebdomadaire),
+    plus the detected war day (1..5) if daily.
+    100% language-independent via the active bright-blue tab at the bottom of the modal (left=daily, right=weekly),
+    with multilingual header text fallback ('Jour 2'/'Day 2'/'Dia 2' vs 'Hebdomadaire'/'Weekly'/'Semanal').
+    """
+    detected_day: Optional[int] = None
+    # Check subtitle at y ~ 0.28..0.33 for a day number (e.g. 'Jour 2 - Classement...')
+    for it in items:
+        if 0.27 <= it["cy"] <= 0.33 and 0.25 <= it["cx"] <= 0.75:
+            m = re.search(r"\b([1-5])\b", it["norm"])
+            if m:
+                detected_day = int(m.group(1))
+            if any(w in it["norm"] for w in ("hebdomad", "weekly", "semanal", "wochent")):
+                return "weekly", None
+
+    # Language-independent color check on bottom tab bar (~y=0.73..0.77, left x=0.34 vs right x=0.65)
+    if im is not None:
+        w, h = im.size
+        left_blue = 0
+        right_blue = 0
+        for ry in (0.735, 0.745, 0.755):
+            y = min(h - 1, int(h * ry))
+            lr, lg, lb = im.getpixel((int(w * 0.34), y))
+            rr, rg, rb = im.getpixel((int(w * 0.65), y))
+            if lb > lr + 70 and lb > 160:
+                left_blue += 1
+            if rb > rr + 70 and rb > 160:
+                right_blue += 1
+        if right_blue > left_blue:
+            return "weekly", None
+        if left_blue > right_blue:
+            return "daily", detected_day
+
+    return "daily", detected_day
+
+
+def scan_war_leaderboard_full(data: bytes) -> Dict[str, Any]:
+    """Return {'period': 'daily'|'weekly', 'day': Optional[int], 'pairs': [(name, pts), ...]}."""
     raw_im = Image.open(io.BytesIO(data)).convert("RGB")
     im = _preprocess_image(raw_im)
-    return parse_war_leaderboard_items(_ocr_to_items(im))
+    items = _ocr_to_items(im)
+    period, day = _detect_leaderboard_period(raw_im, items)
+    pairs = parse_war_leaderboard_items(items)
+    return {"period": period, "day": day, "pairs": pairs}
+
+
+def scan_war_leaderboard_bytes(data: bytes) -> List[Tuple[str, int]]:
+    return scan_war_leaderboard_full(data)["pairs"]
 
 
 def match_player_name(ocr_name: str, profiles: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

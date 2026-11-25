@@ -37,6 +37,7 @@ DEFAULT_PROFILE: Dict[str, Any] = {
     "max_montures": 0,
     "max_oeufs": 0,
     "include_in_calc": 1,
+    "weekly_war_pts": 0,
     "updated_at": 0,
 }
 
@@ -154,6 +155,7 @@ def init_db(db_path: Optional[str] = None) -> None:
                 max_montures INTEGER DEFAULT 0,
                 max_oeufs INTEGER DEFAULT 0,
                 include_in_calc INTEGER DEFAULT 1,
+                weekly_war_pts INTEGER DEFAULT 0,
                 updated_at INTEGER DEFAULT 0
             )
             """
@@ -180,6 +182,7 @@ def init_db(db_path: Optional[str] = None) -> None:
             ("max_montures", "INTEGER DEFAULT 0"),
             ("max_oeufs", "INTEGER DEFAULT 0"),
             ("include_in_calc", "INTEGER DEFAULT 1"),
+            ("weekly_war_pts", "INTEGER DEFAULT 0"),
         ]
         for col, col_type in migrations:
             try:

@@ -380,34 +380,49 @@ class AdminPanelView(discord.ui.View):
             return await interaction.followup.send("❌ Aucune image reçue pour le scan de guerre.")
 
         profiles = db.get_all_profiles(db_path=self.db_path)
-        applied_lines = []
+        applied_daily = []
+        applied_weekly = []
         locked_lines = []
         unmatched = []
 
         for att in collected[:20]:
             raw = await att.read()
-            pairs = await asyncio.to_thread(scanner.scan_war_leaderboard_bytes, raw)
-            for ocr_name, pts in pairs:
+            scan_res = await asyncio.to_thread(scanner.scan_war_leaderboard_full, raw)
+            period = scan_res["period"]
+            eff_day = scan_res["day"] or target_day
+            for ocr_name, pts in scan_res["pairs"]:
                 matched = scanner.match_player_name(ocr_name, profiles)
                 if not matched:
                     unmatched.append(f"{ocr_name} ({db.format_amount(pts)})")
                     continue
-                ok, lock_rem = db.record_war_deduction(
-                    int(matched["user_id"]), target_day, pts, db_path=self.db_path
-                )
-                if ok:
-                    applied_lines.append(f"• **{matched['pseudo']}** : `-{db.format_amount(pts)} pts` (J{target_day})")
+                uid = int(matched["user_id"])
+                if period == "weekly":
+                    db.update_profile(
+                        uid,
+                        {"weekly_war_pts": pts},
+                        db_path=self.db_path,
+                        touch_updated_at=False,
+                    )
+                    applied_weekly.append(f"• **{matched['pseudo']}** : `{db.format_amount(pts)} pts` *(Hebdo — non déduit du daily)*")
                 else:
-                    locked_lines.append(f"• **{matched['pseudo']}** : verrouillé encore `{lock_rem // 60}m{lock_rem % 60:02d}s`")
+                    ok, lock_rem = db.record_war_deduction(
+                        uid, eff_day, pts, db_path=self.db_path
+                    )
+                    if ok:
+                        applied_daily.append(f"• **{matched['pseudo']}** : `-{db.format_amount(pts)} pts` (J{eff_day})")
+                    else:
+                        locked_lines.append(f"• **{matched['pseudo']}** : verrouillé encore `{lock_rem // 60}m{lock_rem % 60:02d}s`")
 
-        report = [f"📊 **Résultat du Scan Guerre ({len(collected)} capture(s), J{target_day})**"]
-        if applied_lines:
-            report.append("\n**Déductions appliquées :**\n" + "\n".join(applied_lines[:20]))
+        report = [f"📊 **Résultat du Scan Guerre ({len(collected)} capture(s))**"]
+        if applied_daily:
+            report.append("\n**📅 Journalier (déduit du calculateur) :**\n" + "\n".join(applied_daily[:20]))
+        if applied_weekly:
+            report.append("\n**🗓️ Hebdomadaire (suivi semaine uniquement, non déduit du daily) :**\n" + "\n".join(applied_weekly[:20]))
         if locked_lines:
             report.append("\n**Ignorés (verrou anti-faux-positif 10min) :**\n" + "\n".join(locked_lines[:10]))
         if unmatched:
             report.append("\n**Non reconnus dans la DB :** " + ", ".join(unmatched[:10]))
-        if not applied_lines and not locked_lines:
+        if not applied_daily and not applied_weekly and not locked_lines:
             report.append("\n❌ Aucun joueur du clan reconnu sur ces captures.")
 
         # Refresh original panel message

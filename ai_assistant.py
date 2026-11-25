@@ -60,7 +60,7 @@ def build_database_context(db_path: Optional[str] = None) -> str:
             f"Potions={p.get('potions')} FiolesV={p.get('fioles_vertes')} Oeufs={p.get('oeufs')} "
             f"FusM={p.get('fusion_montures')} FusP={p.get('fusion_pets')} "
             f"Max(F/C/M/O)=({p.get('max_forge')},{p.get('max_competences')},{p.get('max_montures')},{p.get('max_oeufs')}) "
-            f"Snipe={sdays} J1={pts[0]} J2={pts[1]} J3={pts[2]} J4={pts[3]} J5={pts[4]}"
+            f"Snipe={sdays} Hebdo={p.get('weekly_war_pts') or 0} J1={pts[0]} J2={pts[1]} J3={pts[2]} J4={pts[3]} J5={pts[4]}"
         )
     ded_lines = []
     for d in range(1, 6):

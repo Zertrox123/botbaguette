@@ -12,7 +12,7 @@ import db
 import war_points
 
 AI_CHANNEL_ID = 1574928005959127173
-AI_URL = os.getenv("AI_URL", "http://127.0.0.1:1234/api/v1/chat")
+AI_URL = os.getenv("AI_URL", "http://100.104.243.78:1234/api/v1/chat")
 AI_MODEL = os.getenv("AI_MODEL", "qwen/qwen3-vl-8b")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 

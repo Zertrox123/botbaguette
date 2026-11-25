@@ -1,5 +1,6 @@
 import asyncio
 from collections import deque
+from datetime import datetime
 import glob
 import json
 import os
@@ -24,16 +25,22 @@ _CODE_KEYWORDS = (
 
 
 def build_database_context(db_path: Optional[str] = None) -> str:
-    """Build a compact snapshot of the entire SQLite database for the local model."""
+    """Build a complete, compact snapshot of the entire SQLite database for the local model."""
     profiles = db.get_all_profiles(db_path=db_path)
-    lines = ["=== DB PROFILS ==="]
+    lines = ["=== DB PROFILS (DONNEES LIVE) ==="]
     for p in profiles:
         uid = int(p["user_id"])
         sdays = db.get_user_snipe_days(uid, db_path=db_path)
         pts = [war_points.compute_day_potential(p, d)[0] for d in range(1, 6)]
+        upd_ts = int(p.get("updated_at") or 0)
+        if upd_ts > 0:
+            upd_dt = datetime.fromtimestamp(upd_ts, tz=war_points.PARIS_TZ).strftime("%d/%m/%Y %H:%M")
+            upd_str = f"{upd_dt} ({db.format_relative_age(upd_ts)})"
+        else:
+            upd_str = "jamais"
         lines.append(
-            f"id={p.get('short_id')} pseudo={p.get('pseudo')} puissance={p.get('puissance') or 'inconnue'} "
-            f"calc={p.get('include_in_calc')} Forge={p.get('forge_level')} "
+            f"id={p.get('short_id')} pseudo={p.get('pseudo')} puissance={p.get('puissance') or '?'} "
+            f"maj={upd_str} calc={p.get('include_in_calc')} Forge={p.get('forge_level')} "
             f"Marteaux={p.get('marteaux')} Comp={p.get('competences')} ClesM={p.get('cles_monture')} "
             f"Potions={p.get('potions')} FiolesV={p.get('fioles_vertes')} Oeufs={p.get('oeufs')} "
             f"FusM={p.get('fusion_montures')} FusP={p.get('fusion_pets')} "
@@ -92,6 +99,7 @@ async def ask_local_ai(
         "Tu es l'assistant IA du bot Discord ForgeMaster War pour le jeu mobile Forge Master (clan Baguette6). "
         f"La personne qui te parle actuellement s'appelle {author_name}.\n"
         "Règles strictes :\n"
+        "- Tu AS accès en direct à toute la base de données dans DB PROFILS ci-dessous (incluant la date de mise à jour `maj=...`). Utilise-la toujours pour répondre.\n"
         "- Réponds en français, de façon naturelle, directe et précise (ne répète jamais le pseudo entre crochets).\n"
         "- N'attribue JAMAIS les stats d'un joueur à un autre joueur.\n"
         "- Si un joueur n'apparaît pas dans DB PROFILS, dis clairement qu'il n'a pas encore enregistré son profil (/profil ou /scan).\n"

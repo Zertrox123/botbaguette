@@ -33,6 +33,8 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 emoji_map: Dict[str, discord.Emoji] = {}
 
+AUTO_SCAN_CHANNEL_ID = 1522979872040030259
+
 
 @bot.tree.command(name="profil", description="Affiche et paramètre ton profil Forge Master")
 @app_commands.allowed_installs(guilds=True, users=True)
@@ -304,6 +306,27 @@ async def membre(interaction: discord.Interaction, identifiant: str):
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
+
+    if message.channel.id == AUTO_SCAN_CHANNEL_ID and message.attachments:
+        imgs = [a for a in message.attachments if not a.content_type or a.content_type.startswith("image/")]
+        if imgs:
+            merged_visible: Dict[str, object] = {}
+            merged_secret: Dict[str, object] = {}
+            for att in imgs[:10]:
+                raw = await att.read()
+                result = await asyncio.to_thread(scanner.scan_image_bytes, raw)
+                merged_visible.update(result.get("visible", {}))
+                merged_secret.update(result.get("secret", {}))
+            if merged_visible or merged_secret:
+                payload = {**merged_visible, **merged_secret, "pseudo": message.author.display_name}
+                db.update_profile(message.author.id, payload, clear_deductions=True)
+                embed = discord.Embed(
+                    description="Profil mis à jour avec succès",
+                    color=discord.Color.from_rgb(46, 204, 113),
+                )
+                await message.reply(embed=embed, mention_author=False)
+        return
+
     if message.channel.id == ai_assistant.AI_CHANNEL_ID and message.content.strip():
         async with message.channel.typing():
             reply = await ai_assistant.ask_local_ai(

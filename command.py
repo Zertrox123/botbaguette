@@ -241,17 +241,24 @@ async def snipe(interaction: discord.Interaction, jour: int):
         )
 
 
-@bot.tree.command(name="war", description="Affiche les points potentiels du clan et les snipers pour un jour de guerre")
+WAR_MODE_CHOICES = [
+    app_commands.Choice(name="⚔️ Normal (ressources Max exclues)", value="normal"),
+    app_commands.Choice(name="✨ Ascension (ressources Max uniquement)", value="ascension"),
+]
+
+
+@bot.tree.command(name="war", description="Affiche les points potentiels du clan, déductions, snipers et hebdo")
 @app_commands.allowed_installs(guilds=True, users=True)
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-@app_commands.describe(jour="Jour de guerre (1 = Mardi ... 5 = Samedi, par défaut aujourd'hui)")
-@app_commands.choices(jour=WAR_DAY_CHOICES)
-async def war(interaction: discord.Interaction, jour: Optional[int] = None):
+@app_commands.describe(
+    jour="Jour de guerre (1 = Mardi ... 5 = Samedi, par défaut aujourd'hui)",
+    mode="Mode de calcul (Normal par défaut, ou Ascension)",
+)
+@app_commands.choices(jour=WAR_DAY_CHOICES, mode=WAR_MODE_CHOICES)
+async def war(interaction: discord.Interaction, jour: Optional[int] = None, mode: Optional[str] = None):
     if jour is None:
         today_day, _ = war_points.get_day_info(war_points.datetime.now(war_points.PARIS_TZ))
         jour = today_day or 1
-    guild_id = interaction.guild.id if interaction.guild else 0
-    state = db.get_admin_state(guild_id)
     profiles = db.get_all_profiles()
     sniper_ids = db.get_snipers(jour)
     deductions = db.get_war_deductions(jour)
@@ -263,8 +270,8 @@ async def war(interaction: discord.Interaction, jour: Optional[int] = None):
         emoji_map,
         clan_name=clan_name,
         deductions=deductions,
-        resource_filter=str(state.get("resource_filter") or "all"),
-        ascension_only=bool(int(state.get("ascension_only") or 0)),
+        resource_filter="all",
+        ascension_only=(mode == "ascension"),
     )
     await interaction.response.send_message(embed=embed)
 

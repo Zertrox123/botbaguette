@@ -289,10 +289,13 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
             snipers,
             emoji_map={},
             clan_name="Baguette6",
+            deductions={1: 20000},
         )
         self.assertIn("Jour 1 (Mardi)", embed.title)
-        self.assertIn("400 000", embed.description)  # Total clan
+        self.assertIn("380 000", embed.description)  # Total clan after 20k deduction
+        self.assertIn("-20 000 scanné", embed.description)
         self.assertIn("Snipers : 2", embed.description)
+        self.assertIn("150 000", embed.description)  # Sniper individual points
         self.assertIn("200 000", embed.description)  # Total snipers (150k + 50k)
 
     async def test_admin_panel_ascension_filter_deductions_and_member(self):

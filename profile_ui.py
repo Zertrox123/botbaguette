@@ -179,60 +179,99 @@ def build_war_embed(
     current = now.astimezone(war_points.PARIS_TZ) if now is not None else datetime.now(war_points.PARIS_TZ)
     ded_map = deductions or {}
 
+    valid_res = war_points.DAY_VALID_RESOURCES.get(war_day)
+    if valid_res is not None and resource_filter != "all" and resource_filter not in valid_res:
+        resource_filter = "all"
+
     resources_line = "  ".join(
         f"{e(icon_key)} {label}" for icon_key, label in war_points.DAY_RESOURCE_LABELS.get(war_day, [])
     )
 
+    active_profiles = [p for p in profiles if int(p.get("include_in_calc", 1)) != 0]
+    excluded_count = len(profiles) - len(active_profiles)
+
     scored = []
-    for p in profiles:
-        if int(p.get("include_in_calc", 1)) == 0:
-            continue
+    total_ded = 0
+    for p in active_profiles:
         uid = int(p["user_id"])
-        pts, _ = war_points.compute_day_potential(
+        raw_pts, breakdown = war_points.compute_day_potential(
             p,
             war_day,
             resource_filter=resource_filter,
             ascension_only=ascension_only,
-            deducted_pts=ded_map.get(uid, 0),
+            deducted_pts=0,
         )
+        ded = ded_map.get(uid, 0)
+        eff_ded = min(raw_pts, ded) if raw_pts > 0 else 0
+        pts = raw_pts - eff_ded
+        total_ded += eff_ded
         pseudo = p.get("pseudo") or f"Joueur {uid}"
-        if pts > 0 or uid in sniper_ids:
-            scored.append((pts, uid, pseudo))
-    scored.sort(key=lambda x: (-x[0], x[2].lower()))
+        if pts > 0 or eff_ded > 0 or uid in sniper_ids:
+            scored.append((pts, eff_ded, uid, pseudo, breakdown))
+    scored.sort(key=lambda x: (-x[0], -x[1], x[3].lower()))
 
-    total_clan = sum(pts for pts, _, _ in scored)
-    snipers = [(pts, uid, pseudo) for pts, uid, pseudo in scored if uid in sniper_ids]
+    total_clan = sum(pts for pts, _, _, _, _ in scored)
+    snipers = [(pts, uid, pseudo) for pts, _ded, uid, pseudo, _bd in scored if uid in sniper_ids]
     total_snipers = sum(pts for pts, _, _ in snipers)
 
-    lines = [resources_line, ""]
+    mode_str = "✨ Ascension (Max)" if ascension_only else "⚔️ Normal"
+    filter_str = war_points.RESOURCE_FILTER_LABELS.get(resource_filter, resource_filter)
+    header_meta = f"**Mode :** `{mode_str}`"
+    if resource_filter != "all":
+        header_meta += f"  •  **Filtre :** `{filter_str}`"
+    header_meta += f"  •  **Actifs :** `{len(active_profiles)}`"
+    if excluded_count:
+        header_meta += f" (`{excluded_count}` exclus)"
+
+    lines = [resources_line, header_meta, ""]
     lines.append("▶️ **Points :**")
     if scored:
-        for pts, _uid, pseudo in scored:
-            lines.append(f"• **{pseudo} :** `{db.format_amount(pts)}` pts")
+        for idx, (pts, eff_ded, uid, pseudo, breakdown) in enumerate(scored[:25], start=1):
+            s_icon = "🎯 " if uid in sniper_ids else ""
+            ded_txt = f" *[-{db.format_amount(eff_ded)} scanné]*" if eff_ded > 0 else ""
+            bd_txt = ""
+            if breakdown:
+                bd_parts = [f"{e(ic)} {db.format_amount(v)}" for ic, v in breakdown]
+                bd_txt = f"  ({', '.join(bd_parts)})"
+            lines.append(f"`{idx:>2}.` {s_icon}**{pseudo}** — `{db.format_amount(pts)}` pts{ded_txt}{bd_txt}")
     else:
-        lines.append("• *Aucun joueur enregistré pour le moment.*")
+        lines.append("• *Aucun joueur avec des points dans ce mode.*")
 
     lines.append("")
     lines.append(f"**Total Points du Clan :** `{db.format_amount(total_clan)}` pts")
+    if total_ded > 0:
+        lines.append(f"**Déjà scanné (Déduits) :** `-{db.format_amount(total_ded)}` pts")
     lines.append("")
     lines.append(f"🎯 **Snipers : {len(snipers)}**")
     if snipers:
-        for _pts, _uid, pseudo in snipers:
-            lines.append(f"• **{pseudo}**")
+        for pts, _uid, pseudo in snipers:
+            lines.append(f"• **{pseudo}** — `{db.format_amount(pts)}` pts")
     else:
         lines.append("• *Aucun sniper inscrit (`/snipe`)*")
 
     lines.append("")
     lines.append(f"**Total Points Snipers :** `{db.format_amount(total_snipers)}` pts")
 
+    weekly_rows = [
+        (int(p.get("weekly_war_pts") or 0), p.get("pseudo") or f"Joueur {p['user_id']}")
+        for p in active_profiles
+        if int(p.get("weekly_war_pts") or 0) > 0
+    ]
+    if weekly_rows:
+        weekly_rows.sort(key=lambda x: (-x[0], x[1].lower()))
+        lines.append("")
+        lines.append(f"🗓️ **Hebdo scanné (Top {min(5, len(weekly_rows))}) :**")
+        for w_pts, w_pseudo in weekly_rows[:5]:
+            lines.append(f"• **{w_pseudo}** — `{db.format_amount(w_pts)}` pts")
+
     day_label = war_points.WAR_DAY_NAMES.get(war_day, "")
     title = f"⚔️ Points Potentiels Jour {war_day} ({day_label}) — {clan_name}"
     embed = discord.Embed(
         title=title,
-        description="\n".join(lines),
-        color=discord.Color.from_rgb(52, 152, 219),
+        description="\n".join(lines)[:4096],
+        color=discord.Color.from_rgb(155, 89, 182) if ascension_only else discord.Color.from_rgb(52, 152, 219),
     )
-    embed.set_footer(text=current.strftime("%d-%m-%y %H:%M"))
+    embed.set_footer(text=f"{current.strftime('%d-%m-%y %H:%M')} • /snipe pour t'inscrire • /scan pour mettre à jour")
     return embed
 
 

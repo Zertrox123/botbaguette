@@ -130,6 +130,11 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
         self.assertIn("J1 — Mardi", embed.fields[2].value)
         self.assertIn("J2 — Mercredi", embed.fields[2].value)
 
+        # Power strings with b/t suffix must never be parsed as resource amounts
+        self.assertIsNone(scanner._extract_amount("752b"))
+        self.assertIsNone(scanner._extract_amount("1.25t"))
+        self.assertEqual(scanner._extract_amount("75.1k"), 75100)
+
     async def test_war_points_all_days(self):
         sample = {
             "marteaux": 1000,

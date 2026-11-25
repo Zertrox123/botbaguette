@@ -59,10 +59,15 @@ def _extract_amount(text: str) -> Optional[int]:
     m = _NUM_RE.match(cleaned)
     if not m:
         return None
+    token = m.group(1)
+    # Billions/trillions ('752b', '1.2t') are player power or gold, never a resource stock
+    if re.search(r"[bt]\s*$", token, re.IGNORECASE):
+        return None
     try:
-        return db.parse_amount(m.group(1))
+        val = db.parse_amount(token)
     except ValueError:
         return None
+    return val if val <= 50_000_000 else None
 
 
 def _extract_player_power(items: List[Dict[str, Any]]) -> Optional[str]:

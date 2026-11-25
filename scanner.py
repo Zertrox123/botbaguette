@@ -30,7 +30,8 @@ _FORGE_HINTS = ("forge", "forja", "schmiede", "forjar")
 def _get_ocr() -> RapidOCR:
     global _OCR_ENGINE
     if _OCR_ENGINE is None:
-        _OCR_ENGINE = RapidOCR()
+        # Disable 180-degree rotation classifier so symmetric numbers ('90,700') never flip upside-down
+        _OCR_ENGINE = RapidOCR(use_cls=False)
     return _OCR_ENGINE
 
 
@@ -570,8 +571,10 @@ _INLINE_SCORE_RE = re.compile(
 
 def parse_war_leaderboard_items(items: List[Dict[str, Any]]) -> List[Tuple[str, int]]:
     """
-    Extract (player_name, score_points) pairs from a war leaderboard screenshot.
-    Supports both inline ('Plolipop - 1.5m') and two-column rows (left name, right score).
+    Extract (player_name, score_points) pairs from a Forge Master war leaderboard screenshot.
+    Supports:
+    1. Stacked Forge Master modal cards (player name at y, numeric score directly below at y + 0.01..0.045 inside x=0.33..0.76).
+    2. Inline 'Name - 1.5m points' lines.
     """
     results: List[Tuple[str, int]] = []
     used_ids = set()
@@ -587,40 +590,48 @@ def parse_war_leaderboard_items(items: List[Dict[str, Any]]) -> List[Tuple[str, 
                 results.append((name, amt))
                 used_ids.add(idx)
 
-    # 2. Two-column rows: group remaining items by horizontal row (|dy| <= 0.035)
-    remaining = [(idx, it) for idx, it in enumerate(items) if idx not in used_ids]
-    remaining.sort(key=lambda pair: (pair[1]["cy"], pair[1]["cx"]))
-    rows: List[List[Dict[str, Any]]] = []
-    for _, it in remaining:
-        if rows and abs(it["cy"] - rows[-1][0]["cy"]) <= 0.032:
-            rows[-1].append(it)
-        else:
-            rows.append([it])
+    # 2. Stacked Forge Master war modal cards (strictly inside white modal: x=0.33..0.76, y=0.31..0.74)
+    modal_items = [
+        (idx, it) for idx, it in enumerate(items)
+        if idx not in used_ids and 0.33 <= it["cx"] <= 0.76 and 0.31 <= it["cy"] <= 0.74
+    ]
+    modal_items.sort(key=lambda pair: (pair[1]["cy"], pair[1]["cx"]))
 
-    for row in rows:
-        if len(row) < 2:
+    def _parse_score(txt: str) -> Optional[int]:
+        s = _fix_digit_typos(txt.strip())
+        if re.match(r"^\d{1,3}(?:,\d{3})+$", s):
+            s = s.replace(",", "")
+        elif re.match(r"^\d{1,3}(?:\.\d{3})+$", s):
+            s = s.replace(".", "")
+        if not re.fullmatch(r"[0-9]+(?:[.,][0-9]+)?\s*[kmbt]?", s, re.IGNORECASE):
+            return None
+        return _extract_amount(s)
+
+    for i, (idx_n, it_n) in enumerate(modal_items):
+        if idx_n in used_ids:
             continue
-        row.sort(key=lambda it: it["cx"])
-        # Find leftmost non-numeric text (player name) and rightmost numeric score
-        name_cand = None
-        score_cand = None
-        for it in row:
-            txt = it["text"].strip()
-            if name_cand is None and re.search(r"[A-Za-z\u00C0-\u017F]{2,}", txt) and _extract_amount(txt) is None:
-                # Strip leading rank like '1.' or '#1'
-                cleaned_name = re.sub(r"^[#\d.\s)\-]+", "", txt).strip()
-                if len(cleaned_name) >= 2:
-                    name_cand = cleaned_name
-        for it in reversed(row):
-            txt = it["text"].strip()
-            # Handle comma thousands separator '1,500,000'
-            norm_num = txt.replace(",", "") if re.match(r"^\d{1,3}(?:,\d{3})+$", txt) else txt
-            amt = _extract_amount(norm_num)
-            if amt is not None and amt >= 100:
-                score_cand = amt
+        txt_n = it_n["text"].strip()
+        # Must be a player name (contains letters, not a pure number, not 'MVP')
+        if _parse_score(txt_n) is not None or it_n["norm"] in ("mvp", "quotidien", "hebdomadaire", "daily", "weekly"):
+            continue
+        if not re.search(r"[A-Za-z\u00C0-\u017F]{2,}", txt_n):
+            continue
+        # Look for the numeric score directly below this name (dy in 0.006..0.048, |dx| <= 0.22)
+        for idx_s, it_s in modal_items[i + 1 :]:
+            if idx_s in used_ids:
+                continue
+            dy = it_s["cy"] - it_n["cy"]
+            if dy > 0.048:
                 break
-        if name_cand and score_cand is not None:
-            results.append((name_cand, score_cand))
+            if dy >= 0.006 and abs(it_s["cx"] - it_n["cx"]) <= 0.22:
+                score = _parse_score(it_s["text"])
+                if score is not None and score > 0:
+                    cleaned_name = re.sub(r"^[#\d.\s)\-]+", "", txt_n).strip()
+                    if len(cleaned_name) >= 2:
+                        results.append((cleaned_name, score))
+                        used_ids.add(idx_n)
+                        used_ids.add(idx_s)
+                    break
 
     return results
 

@@ -295,6 +295,71 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Snipers : 2", embed.description)
         self.assertIn("200 000", embed.description)  # Total snipers (150k + 50k)
 
+    async def test_admin_panel_ascension_filter_deductions_and_member(self):
+        import admin_ui
+        import ai_assistant
+
+        # Seed player with max_competences=1 and max_montures=0
+        p = db.update_profile(
+            42,
+            {
+                "pseudo": "Plolipop",
+                "marteaux": 1000,         # 5 000 pts J1
+                "competences": 400,       # 10 * 225 = 2 250 pts J1 (MAX!)
+                "max_competences": 1,
+                "max_forge": 0,
+                "include_in_calc": 1,
+            },
+            db_path=self.db_path,
+        )
+        sid = p["short_id"]
+        self.assertGreaterEqual(sid, 1)
+
+        # Normal mode excludes Max resources (only marteaux = 5 000)
+        self.assertEqual(war_points.compute_day_potential(p, 1, ascension_only=False)[0], 5000)
+        # Ascension mode counts ONLY Max resources (only competences = 2 250)
+        self.assertEqual(war_points.compute_day_potential(p, 1, ascension_only=True)[0], 2250)
+        # Resource filter works
+        self.assertEqual(war_points.compute_day_potential(p, 1, resource_filter="competences", ascension_only=True)[0], 2250)
+        self.assertEqual(war_points.compute_day_potential(p, 1, resource_filter="marteaux", ascension_only=True)[0], 0)
+
+        # War leaderboard OCR + fuzzy match + 10-minute lock
+        pairs = scanner.parse_war_leaderboard_items([
+            {"text": "Plolipop - 1.5k points", "norm": "plolipop - 1.5k points", "cx": 0.5, "cy": 0.2, "conf": 0.99},
+        ])
+        self.assertEqual(pairs, [("Plolipop", 1500)])
+        matched = scanner.match_player_name("Plolipoq", db.get_all_profiles(db_path=self.db_path))
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched["user_id"], 42)
+
+        ok1, rem1 = db.record_war_deduction(42, 1, 1500, now=10000, db_path=self.db_path)
+        self.assertTrue(ok1)
+        self.assertEqual(rem1, 0)
+        # Second scan within 10min is blocked
+        ok2, rem2 = db.record_war_deduction(42, 1, 2000, now=10120, db_path=self.db_path)
+        self.assertFalse(ok2)
+        self.assertEqual(rem2, 480)
+        # Deducted in calculator: 5000 - 1500 = 3500
+        deds = db.get_war_deductions(1, db_path=self.db_path)
+        self.assertEqual(war_points.compute_day_potential(p, 1, deducted_pts=deds[42])[0], 3500)
+
+        # Admin state persistence & PC embed
+        db.update_admin_state(999, {"selected_day": 1, "ascension_only": 1, "resource_filter": "competences"}, db_path=self.db_path)
+        panel_embed = admin_ui.build_admin_panel_embed(999, "Baguette6", emoji_map={}, db_path=self.db_path)
+        self.assertIn("ASCENSION", panel_embed.description)
+        self.assertIn("Plolipop", panel_embed.fields[2].value)
+
+        # Members page embed + /membre lookup by short_id
+        found = db.get_profile_by_identifier(str(sid), db_path=self.db_path)
+        self.assertEqual(found["user_id"], 42)
+        mem_embed = admin_ui.build_members_page_embed([found], 1, {42}, page=0)
+        self.assertIn(f"(id: {sid})", mem_embed.description)
+        self.assertIn("🟢", mem_embed.description)
+
+        # AI context builder includes DB snapshot
+        ctx = ai_assistant.build_database_context(db_path=self.db_path)
+        self.assertIn("Plolipop", ctx)
+
 
 if __name__ == "__main__":
     unittest.main()

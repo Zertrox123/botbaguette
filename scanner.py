@@ -1,3 +1,4 @@
+import difflib
 import io
 import json
 import re
@@ -18,6 +19,7 @@ _RATIO_RE = re.compile(r"(\d{1,2})\s*/\s*(\d{1,2})\b")
 _TIMER_RE = re.compile(r"\b\d+\s*[hdj]\s*\d+\s*[mh]\b|\b\d+\s*m\s*\d+\s*s\b", re.IGNORECASE)
 _PCT_RE = re.compile(r"([0-9]+(?:[.,][0-9]+)?)\s*%")
 _LAST_INT_RE = re.compile(r"(\d+)\s*$")
+_MAX_HINTS = ("maximis", "maxed", "maximo", "maxim", "max")
 
 # Optional multilingual hints (FR / EN / ES / DE / PT) used only as tie-breakers on cropped screens
 _PET_HINTS = ("animaux", "pets", "mascotas", "haustiere", "euf", "oeuf", "fuf", "egg", "huevo", "ovo")
@@ -210,6 +212,27 @@ def _extract_merge_rarities(
     return result
 
 
+def _detect_summon_maxed(items: List[Dict[str, Any]], y_min: float, y_max: float) -> Optional[int]:
+    """
+    Check the summon-level badge to the right of the summon button (x ~ 0.66..0.94, y_min..y_max).
+    Returns 1 if 'Maximisé'/'Max'/lvl 100 is detected, 0 if a level < 100 is detected, else None.
+    """
+    right_boxes = [
+        it for it in items
+        if 0.66 <= it["cx"] <= 0.94 and y_min <= it["cy"] <= y_max
+    ]
+    for it in right_boxes:
+        n = it["norm"]
+        if any(h in n for h in _MAX_HINTS):
+            return 1
+        lm = _LAST_INT_RE.search(n)
+        if lm and "/" not in n and "+" not in n:
+            val = int(lm.group(1))
+            if 1 <= val <= 100:
+                return 1 if val >= 100 else 0
+    return None
+
+
 def _forge_level_to_tiers(forge_level: int) -> Tuple[int, int]:
     """Map Forge level (0..35) to integer (J1, J3/J5) fallback points per hammer."""
     avg_j1, avg_j3 = war_points.forge_level_to_avg_points(forge_level)
@@ -356,6 +379,7 @@ def parse_ocr_items(
         if lvl_headers:
             lvl = max(0, min(35, int(_LAST_INT_RE.search(lvl_headers[0]["norm"]).group(1))))
             secret["forge_level"] = lvl
+            secret["max_forge"] = 1 if lvl >= 35 else 0
         # Current-level probability column sits at x ~ 0.55..0.76, sorted top-to-bottom (rows 0..2=+2/+1, 3..5=+4/+3, 6+=+5/+4)
         cur_col = sorted([p for p in forge_prob_cols if p[1] <= 0.76], key=lambda p: p[0])
         total_pct = sum(p[2] for p in cur_col)
@@ -425,6 +449,9 @@ def parse_ocr_items(
         cost = _find_summon_cost(items, y_min=0.60, y_max=0.84)
         if cost is not None:
             secret["skill_summon_cost"] = cost
+        is_max = _detect_summon_maxed(items, y_min=0.68, y_max=0.80)
+        if is_max is not None:
+            secret["max_competences"] = is_max
         return {"screen_type": screen_type, "visible": visible, "secret": secret}
 
     # 4. ANIMALS / PETS — Universal signature: hatch timers ('5h47m', '1h36m') or '+1' incubator slot at bottom (y=0.65..0.82)
@@ -447,6 +474,9 @@ def parse_ocr_items(
         cost = _find_summon_cost(items, y_min=0.45, y_max=0.66)
         if cost is not None:
             secret["egg_summon_cost"] = cost
+        is_max = _detect_summon_maxed(items, y_min=0.50, y_max=0.64)
+        if is_max is not None:
+            secret["max_oeufs"] = is_max
         return {"screen_type": screen_type, "visible": visible, "secret": secret}
 
     # 5. MOUNTS — Universal signature: centered modal with summon button at y=0.64..0.78 + key count centered at y=0.22..0.32
@@ -467,6 +497,9 @@ def parse_ocr_items(
                 visible["cles_monture"] = amt
         if mount_summon_cost is not None:
             secret["mount_summon_cost"] = mount_summon_cost
+        is_max = _detect_summon_maxed(items, y_min=0.66, y_max=0.78)
+        if is_max is not None:
+            secret["max_montures"] = is_max
         power = _extract_player_power(items)
         if power:
             visible["puissance"] = power
@@ -503,6 +536,7 @@ def parse_ocr_items(
                     lvl = max(0, min(35, int(lm.group(1))))
                     avg_j1, avg_j3 = war_points.forge_level_to_avg_points(lvl)
                     secret["forge_level"] = lvl
+                    secret["max_forge"] = 1 if lvl >= 35 else 0
                     secret["forge_avg_j1"] = avg_j1
                     secret["forge_avg_j3"] = avg_j3
                     secret["forge_tier_j1"] = int(round(avg_j1))
@@ -526,3 +560,92 @@ def scan_image_bytes(data: bytes) -> Dict[str, Any]:
         if res2["screen_type"] != "unknown" and (len(res2["visible"]) + len(res2["secret"])) >= (len(res["visible"]) + len(res["secret"])):
             return res2
     return res
+
+
+_INLINE_SCORE_RE = re.compile(
+    r"^\s*([A-Za-z0-9_\u00C0-\u017F][A-Za-z0-9_\s.\-\u00C0-\u017F]{1,28}?)\s*[-:|]\s*([0-9][0-9\s.,]*[kmbt]?)\s*(?:pts?|points?)?\s*$",
+    re.IGNORECASE,
+)
+
+
+def parse_war_leaderboard_items(items: List[Dict[str, Any]]) -> List[Tuple[str, int]]:
+    """
+    Extract (player_name, score_points) pairs from a war leaderboard screenshot.
+    Supports both inline ('Plolipop - 1.5m') and two-column rows (left name, right score).
+    """
+    results: List[Tuple[str, int]] = []
+    used_ids = set()
+
+    # 1. Inline 'Name - 1.5m points' lines
+    for idx, it in enumerate(items):
+        m = _INLINE_SCORE_RE.match(it["text"].strip())
+        if m:
+            name = m.group(1).strip()
+            raw_num = m.group(2).replace(",", "") if re.match(r"^\d{1,3}(?:,\d{3})+$", m.group(2).strip()) else m.group(2)
+            amt = _extract_amount(raw_num)
+            if amt is not None and amt > 0 and not name.isdigit():
+                results.append((name, amt))
+                used_ids.add(idx)
+
+    # 2. Two-column rows: group remaining items by horizontal row (|dy| <= 0.035)
+    remaining = [(idx, it) for idx, it in enumerate(items) if idx not in used_ids]
+    remaining.sort(key=lambda pair: (pair[1]["cy"], pair[1]["cx"]))
+    rows: List[List[Dict[str, Any]]] = []
+    for _, it in remaining:
+        if rows and abs(it["cy"] - rows[-1][0]["cy"]) <= 0.032:
+            rows[-1].append(it)
+        else:
+            rows.append([it])
+
+    for row in rows:
+        if len(row) < 2:
+            continue
+        row.sort(key=lambda it: it["cx"])
+        # Find leftmost non-numeric text (player name) and rightmost numeric score
+        name_cand = None
+        score_cand = None
+        for it in row:
+            txt = it["text"].strip()
+            if name_cand is None and re.search(r"[A-Za-z\u00C0-\u017F]{2,}", txt) and _extract_amount(txt) is None:
+                # Strip leading rank like '1.' or '#1'
+                cleaned_name = re.sub(r"^[#\d.\s)\-]+", "", txt).strip()
+                if len(cleaned_name) >= 2:
+                    name_cand = cleaned_name
+        for it in reversed(row):
+            txt = it["text"].strip()
+            # Handle comma thousands separator '1,500,000'
+            norm_num = txt.replace(",", "") if re.match(r"^\d{1,3}(?:,\d{3})+$", txt) else txt
+            amt = _extract_amount(norm_num)
+            if amt is not None and amt >= 100:
+                score_cand = amt
+                break
+        if name_cand and score_cand is not None:
+            results.append((name_cand, score_cand))
+
+    return results
+
+
+def scan_war_leaderboard_bytes(data: bytes) -> List[Tuple[str, int]]:
+    raw_im = Image.open(io.BytesIO(data)).convert("RGB")
+    im = _preprocess_image(raw_im)
+    return parse_war_leaderboard_items(_ocr_to_items(im))
+
+
+def match_player_name(ocr_name: str, profiles: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Fuzzy-match an OCR player name against clan profiles."""
+    target = _norm(ocr_name)
+    if not target:
+        return None
+    best_p = None
+    best_score = 0.0
+    for p in profiles:
+        pseudo = _norm(p.get("pseudo") or "")
+        if not pseudo:
+            continue
+        if pseudo == target:
+            return p
+        score = difflib.SequenceMatcher(None, target, pseudo).ratio()
+        if score > best_score:
+            best_score = score
+            best_p = p
+    return best_p if best_score >= 0.72 else None

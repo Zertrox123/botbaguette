@@ -171,9 +171,13 @@ def build_war_embed(
     emoji_map: Dict[str, discord.Emoji],
     clan_name: str = "Baguette6",
     now: Optional[datetime] = None,
+    deductions: Optional[Dict[int, int]] = None,
+    resource_filter: str = "all",
+    ascension_only: bool = False,
 ) -> discord.Embed:
     e = lambda k: emoji_str(emoji_map, k)
     current = now.astimezone(war_points.PARIS_TZ) if now is not None else datetime.now(war_points.PARIS_TZ)
+    ded_map = deductions or {}
 
     resources_line = "  ".join(
         f"{e(icon_key)} {label}" for icon_key, label in war_points.DAY_RESOURCE_LABELS.get(war_day, [])
@@ -181,8 +185,16 @@ def build_war_embed(
 
     scored = []
     for p in profiles:
-        pts, _ = war_points.compute_day_potential(p, war_day)
+        if int(p.get("include_in_calc", 1)) == 0:
+            continue
         uid = int(p["user_id"])
+        pts, _ = war_points.compute_day_potential(
+            p,
+            war_day,
+            resource_filter=resource_filter,
+            ascension_only=ascension_only,
+            deducted_pts=ded_map.get(uid, 0),
+        )
         pseudo = p.get("pseudo") or f"Joueur {uid}"
         if pts > 0 or uid in sniper_ids:
             scored.append((pts, uid, pseudo))
@@ -254,6 +266,7 @@ class AmountModal(discord.ui.Modal):
             self.profile_view.user_id,
             {self.field_key: parsed, "pseudo": interaction.user.display_name},
             db_path=self.profile_view.db_path,
+            clear_deductions=True,
         )
         embed = build_profile_embed(profile, interaction.user.display_name, self.profile_view.emoji_map, can_edit=True)
         await interaction.response.edit_message(embed=embed, view=self.profile_view)

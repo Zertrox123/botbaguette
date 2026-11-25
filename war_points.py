@@ -101,13 +101,37 @@ def get_day_info(dt: datetime) -> Tuple[Optional[int], str]:
     return WEEKDAY_TO_WAR_DAY[wd], WEEKDAY_NAMES[wd]
 
 
-def compute_day_potential(profile: Dict[str, Any], war_day: Optional[int]) -> Tuple[int, List[Tuple[str, int]]]:
+RESOURCE_FILTER_LABELS: Dict[str, str] = {
+    "all": "Tout",
+    "marteaux": "Marteaux (Forge)",
+    "competences": "Compétences",
+    "cles_monture": "Clés Monture",
+    "oeufs": "Œufs",
+    "fusion_montures": "Fusion Montures",
+    "fusion_pets": "Fusion Pets",
+}
+
+
+def compute_day_potential(
+    profile: Dict[str, Any],
+    war_day: Optional[int],
+    resource_filter: str = "all",
+    ascension_only: bool = False,
+    deducted_pts: int = 0,
+    respect_include_flag: bool = True,
+) -> Tuple[int, List[Tuple[str, int]]]:
     """
-    Calcule les points potentiels de guerre de clan pour un jour donné (J1..J5)
-    à partir des ressources et fusions du profil.
-    Retourne (total_points, [(emoji_key, points), ...]).
+    Calcule les points potentiels de guerre de clan pour un jour donné (J1..J5).
+    - Respecte include_in_calc (si 0 -> 0 pts).
+    - Respecte les tags Max/Ascension (max_forge, max_competences, max_montures, max_oeufs) :
+      * Normal (ascension_only=False) : ignore les ressources taguées Max.
+      * Ascension (ascension_only=True) : ne compte QUE les ressources taguées Max.
+    - Respecte resource_filter ('all' ou une ressource précise).
+    - Déduit deducted_pts (scan quotidien admin).
     """
     if war_day is None:
+        return 0, []
+    if respect_include_flag and int(profile.get("include_in_calc", 1)) == 0:
         return 0, []
 
     marteaux = int(profile.get("marteaux") or 0)
@@ -116,6 +140,23 @@ def compute_day_potential(profile: Dict[str, Any], war_day: Optional[int]) -> Tu
     oeufs = int(profile.get("oeufs") or 0)
     fusion_montures = int(profile.get("fusion_montures") or 0)
     fusion_pets = int(profile.get("fusion_pets") or 0)
+
+    max_flags = {
+        "marteaux": bool(int(profile.get("max_forge") or 0)),
+        "competences": bool(int(profile.get("max_competences") or 0)),
+        "cles_monture": bool(int(profile.get("max_montures") or 0)),
+        "oeufs": bool(int(profile.get("max_oeufs") or 0)),
+        "fusion_montures": False,
+        "fusion_pets": False,
+    }
+
+    def allow(res_key: str) -> bool:
+        if resource_filter != "all" and resource_filter != res_key:
+            return False
+        is_max = max_flags.get(res_key, False)
+        if ascension_only:
+            return is_max
+        return not is_max
 
     # Paramètres secrets stockés par joueur (repli sur les estimations par défaut)
     skill_cost = max(1.0, float(profile.get("skill_summon_cost") or SKILL_SUMMON_COST))
@@ -128,60 +169,69 @@ def compute_day_potential(profile: Dict[str, Any], war_day: Optional[int]) -> Tu
     breakdown: List[Tuple[str, int]] = []
 
     if war_day == 1:
-        # J1 (Mardi) : Forge + Invocation compétence (+225)
-        pts_forge = int(round(marteaux * forge_avg_j1))
-        pts_skills = int(competences // skill_cost) * 225
-        if pts_forge:
-            breakdown.append(("fm_hammer", pts_forge))
-        if pts_skills:
-            breakdown.append(("fm_ticket", pts_skills))
+        if allow("marteaux"):
+            pts_forge = int(round(marteaux * forge_avg_j1))
+            if pts_forge:
+                breakdown.append(("fm_hammer", pts_forge))
+        if allow("competences"):
+            pts_skills = int(competences // skill_cost) * 225
+            if pts_skills:
+                breakdown.append(("fm_ticket", pts_skills))
 
     elif war_day == 2:
-        # J2 (Mercredi) : Invocation monture (+600) + Fusion monture (+600)
-        pts_mount_summon = int(cles_monture // mount_cost) * 600
-        pts_mount_merge = fusion_montures * 600
-        if pts_mount_summon:
-            breakdown.append(("fm_mountkey", pts_mount_summon))
-        if pts_mount_merge:
-            breakdown.append(("fm_mount_merge", pts_mount_merge))
+        if allow("cles_monture"):
+            pts_mount_summon = int(cles_monture // mount_cost) * 600
+            if pts_mount_summon:
+                breakdown.append(("fm_mountkey", pts_mount_summon))
+        if allow("fusion_montures"):
+            pts_mount_merge = fusion_montures * 600
+            if pts_mount_merge:
+                breakdown.append(("fm_mount_merge", pts_mount_merge))
 
     elif war_day == 3:
-        # J3 (Jeudi) : Forge + Compétence (+175) + Éclosion œuf (espérance raretés) + Fusion pet (+1250)
-        pts_forge = int(round(marteaux * forge_avg_j3))
-        pts_skills = int(competences // skill_cost) * 175
-        pts_eggs = int(round((oeufs // egg_cost) * avg_egg_pts))
-        pts_pet_merge = fusion_pets * 1250
-        if pts_forge:
-            breakdown.append(("fm_hammer", pts_forge))
-        if pts_skills:
-            breakdown.append(("fm_ticket", pts_skills))
-        if pts_eggs:
-            breakdown.append(("fm_egg", pts_eggs))
-        if pts_pet_merge:
-            breakdown.append(("fm_pet_merge", pts_pet_merge))
+        if allow("marteaux"):
+            pts_forge = int(round(marteaux * forge_avg_j3))
+            if pts_forge:
+                breakdown.append(("fm_hammer", pts_forge))
+        if allow("competences"):
+            pts_skills = int(competences // skill_cost) * 175
+            if pts_skills:
+                breakdown.append(("fm_ticket", pts_skills))
+        if allow("oeufs"):
+            pts_eggs = int(round((oeufs // egg_cost) * avg_egg_pts))
+            if pts_eggs:
+                breakdown.append(("fm_egg", pts_eggs))
+        if allow("fusion_pets"):
+            pts_pet_merge = fusion_pets * 1250
+            if pts_pet_merge:
+                breakdown.append(("fm_pet_merge", pts_pet_merge))
 
     elif war_day == 4:
-        # J4 (Vendredi) : Invocation monture (+600) + Fusion monture (+600)
-        pts_mount_summon = int(cles_monture // mount_cost) * 600
-        pts_mount_merge = fusion_montures * 600
-        if pts_mount_summon:
-            breakdown.append(("fm_mountkey", pts_mount_summon))
-        if pts_mount_merge:
-            breakdown.append(("fm_mount_merge", pts_mount_merge))
+        if allow("cles_monture"):
+            pts_mount_summon = int(cles_monture // mount_cost) * 600
+            if pts_mount_summon:
+                breakdown.append(("fm_mountkey", pts_mount_summon))
+        if allow("fusion_montures"):
+            pts_mount_merge = fusion_montures * 600
+            if pts_mount_merge:
+                breakdown.append(("fm_mount_merge", pts_mount_merge))
 
     elif war_day == 5:
-        # J5 (Samedi) : Forge + Éclosion œuf (espérance raretés) + Fusion pet (+1250)
-        pts_forge = int(round(marteaux * forge_avg_j3))
-        pts_eggs = int(round((oeufs // egg_cost) * avg_egg_pts))
-        pts_pet_merge = fusion_pets * 1250
-        if pts_forge:
-            breakdown.append(("fm_hammer", pts_forge))
-        if pts_eggs:
-            breakdown.append(("fm_egg", pts_eggs))
-        if pts_pet_merge:
-            breakdown.append(("fm_pet_merge", pts_pet_merge))
+        if allow("marteaux"):
+            pts_forge = int(round(marteaux * forge_avg_j3))
+            if pts_forge:
+                breakdown.append(("fm_hammer", pts_forge))
+        if allow("oeufs"):
+            pts_eggs = int(round((oeufs // egg_cost) * avg_egg_pts))
+            if pts_eggs:
+                breakdown.append(("fm_egg", pts_eggs))
+        if allow("fusion_pets"):
+            pts_pet_merge = fusion_pets * 1250
+            if pts_pet_merge:
+                breakdown.append(("fm_pet_merge", pts_pet_merge))
 
-    total = sum(pts for _, pts in breakdown)
+    raw_total = sum(pts for _, pts in breakdown)
+    total = max(0, raw_total - max(0, int(deducted_pts or 0)))
     return total, breakdown
 
 

@@ -5,6 +5,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+import admin_ui
+import ai_assistant
 import db
 import profile_ui
 import scanner
@@ -27,6 +29,7 @@ def load_token() -> str:
 
 
 intents = discord.Intents.default()
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 emoji_map: Dict[str, discord.Emoji] = {}
 
@@ -78,7 +81,7 @@ def build_scan_preview_embed(visible: Dict[str, object], has_secret: bool = Fals
         color=discord.Color.from_rgb(52, 152, 219),
         description="\u200b\n" + "\n".join(lines),
     )
-    embed.set_footer(text="Vérifie les valeurs détectées puis clique sur Appliquer ou Corriger.")
+    embed.set_footer(text="Vérifie les valeurs détectées puis clique sur Appliquer ou Correction.")
     return embed
 
 
@@ -87,7 +90,6 @@ class ScanCorrectionModal(discord.ui.Modal):
         super().__init__(title="Corriger les valeurs scannées")
         self.scan_view = view
         self.inputs: Dict[str, discord.ui.TextInput] = {}
-        # Discord modals support up to 5 TextInput fields
         for key in list(view.visible.keys())[:5]:
             val = view.visible[key]
             lbl = "Puissance" if key == "puissance" else FIELD_LABELS.get(key, (key, ""))[0]
@@ -130,7 +132,7 @@ class ScanConfirmView(discord.ui.View):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("❌ Ce scan ne t'appartient pas.", ephemeral=True)
         payload = {**self.visible, **self.secret, "pseudo": interaction.user.display_name}
-        profile = db.update_profile(self.user_id, payload)
+        profile = db.update_profile(self.user_id, payload, clear_deductions=True)
         embed = profile_ui.build_profile_embed(profile, interaction.user.display_name, emoji_map, can_edit=True)
         view = profile_ui.ProfileView(self.user_id, emoji_map)
         self.stop()
@@ -150,7 +152,7 @@ class ScanConfirmView(discord.ui.View):
         await interaction.response.edit_message(content="❌ Scan annulé.", embed=None, view=None)
 
 
-@bot.tree.command(name="scan", description="Détecte automatiquement tes ressources Forge Master depuis tes captures d'écran")
+@bot.tree.command(name="scan", description="Détecte automatiquement tes ressources Forge Master depuis tes captures (jusqu'à 10)")
 @app_commands.allowed_installs(guilds=True, users=True)
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
 @app_commands.describe(
@@ -159,6 +161,11 @@ class ScanConfirmView(discord.ui.View):
     image3="3e capture (optionnel)",
     image4="4e capture (optionnel)",
     image5="5e capture (optionnel)",
+    image6="6e capture (optionnel)",
+    image7="7e capture (optionnel)",
+    image8="8e capture (optionnel)",
+    image9="9e capture (optionnel)",
+    image10="10e capture (optionnel)",
 )
 async def scan(
     interaction: discord.Interaction,
@@ -167,9 +174,17 @@ async def scan(
     image3: Optional[discord.Attachment] = None,
     image4: Optional[discord.Attachment] = None,
     image5: Optional[discord.Attachment] = None,
+    image6: Optional[discord.Attachment] = None,
+    image7: Optional[discord.Attachment] = None,
+    image8: Optional[discord.Attachment] = None,
+    image9: Optional[discord.Attachment] = None,
+    image10: Optional[discord.Attachment] = None,
 ):
     await interaction.response.defer(ephemeral=True, thinking=True)
-    attachments = [a for a in (image1, image2, image3, image4, image5) if a is not None]
+    attachments = [
+        a for a in (image1, image2, image3, image4, image5, image6, image7, image8, image9, image10)
+        if a is not None
+    ]
 
     merged_visible: Dict[str, object] = {}
     merged_secret: Dict[str, object] = {}
@@ -185,7 +200,7 @@ async def scan(
     if not merged_visible and not merged_secret:
         return await interaction.followup.send(
             "❌ Aucune donnée Forge Master reconnue sur ces captures. "
-            "Envoie un écran principal (Forge), Montures, Animaux, Compétences, Arbre Technologique ou Fusion.",
+            "Envoie un écran principal (Forge), Probabilités Forge, Montures, Animaux, Compétences, Arbre Technologique ou Fusion.",
             ephemeral=True,
         )
 
@@ -233,11 +248,66 @@ async def war(interaction: discord.Interaction, jour: Optional[int] = None):
     if jour is None:
         today_day, _ = war_points.get_day_info(war_points.datetime.now(war_points.PARIS_TZ))
         jour = today_day or 1
+    guild_id = interaction.guild.id if interaction.guild else 0
+    state = db.get_admin_state(guild_id)
     profiles = db.get_all_profiles()
     sniper_ids = db.get_snipers(jour)
+    deductions = db.get_war_deductions(jour)
     clan_name = interaction.guild.name if interaction.guild else "Baguette6"
-    embed = profile_ui.build_war_embed(jour, profiles, sniper_ids, emoji_map, clan_name=clan_name)
+    embed = profile_ui.build_war_embed(
+        jour,
+        profiles,
+        sniper_ids,
+        emoji_map,
+        clan_name=clan_name,
+        deductions=deductions,
+        resource_filter=str(state.get("resource_filter") or "all"),
+        ascension_only=bool(int(state.get("ascension_only") or 0)),
+    )
     await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="admin", description="Ouvre le Panel Admin Stratégie de Guerre (format PC)")
+@app_commands.allowed_installs(guilds=True, users=True)
+@app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+async def admin_panel(interaction: discord.Interaction):
+    guild_id = interaction.guild.id if interaction.guild else 0
+    clan_name = interaction.guild.name if interaction.guild else "Baguette6"
+    embed = admin_ui.build_admin_panel_embed(guild_id, clan_name, emoji_map)
+    view = admin_ui.AdminPanelView(guild_id, clan_name, emoji_map)
+    await interaction.response.send_message(embed=embed, view=view)
+
+
+@bot.tree.command(name="membre", description="Gérer un membre (snipe, ressources Max/Ascension, calculateur)")
+@app_commands.allowed_installs(guilds=True, users=True)
+@app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+@app_commands.describe(identifiant="ID court (ex: 1), pseudo ou @mention du membre")
+async def membre(interaction: discord.Interaction, identifiant: str):
+    profile = db.get_profile_by_identifier(identifiant)
+    if not profile:
+        return await interaction.response.send_message(
+            f"❌ Aucun membre trouvé pour `{identifiant}`. Consulte la liste via `/admin` → **👥 Membres**.",
+            ephemeral=True,
+        )
+    uid = int(profile["user_id"])
+    sdays = db.get_user_snipe_days(uid)
+    embed = admin_ui.build_member_admin_embed(profile, sdays)
+    view = admin_ui.MemberEditView(uid)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+    if message.channel.id == ai_assistant.AI_CHANNEL_ID and message.content.strip():
+        async with message.channel.typing():
+            reply = await ai_assistant.ask_local_ai(message.content.strip())
+        # Chunk response cleanly under Discord's 2000-char limit
+        for i in range(0, len(reply), 1950):
+            await message.reply(reply[i : i + 1950], mention_author=False)
+        return
+    await bot.process_commands(message)
 
 
 @bot.event

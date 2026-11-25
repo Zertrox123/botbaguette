@@ -1,7 +1,4 @@
 import asyncio
-import csv
-import io
-import json
 import time
 from datetime import datetime
 from typing import Dict, Any, List, Optional
@@ -44,10 +41,6 @@ def build_admin_panel_embed(
     selected_day = int(state.get("selected_day") or 0)
     res_filter = str(state.get("resource_filter") or "all")
     ascension_only = bool(int(state.get("ascension_only") or 0))
-    try:
-        day_plans = json.loads(state.get("day_plans_json") or "{}")
-    except (TypeError, ValueError):
-        day_plans = {}
 
     profiles = db.get_all_profiles(db_path=db_path)
     e = lambda k: profile_ui.emoji_str(emoji_map, k)
@@ -62,10 +55,10 @@ def build_admin_panel_embed(
     filter_str = war_points.RESOURCE_FILTER_LABELS.get(res_filter, res_filter)
     mode_str = "✨ ASCENSION (Ressources Max uniquement)" if ascension_only else "⚔️ NORMAL (Ressources Max exclues)"
 
-    # Build wide PC-readable 5-day table
+    # Compact 50-char table so it never wraps inside Discord PC embeds
     table_lines = [
-        f"{'Jour':<14} | {'Plan':<7} | {'Clan Pts':>12} | {'Snipers':>14} | {'Déduits':>10}",
-        "-" * 69,
+        f"{'Jour':<11} | {'Clan Pts':>9} | {'Snipers':>13} | {'Déduits':>7}",
+        "-" * 49,
     ]
     days_to_show = [1, 2, 3, 4, 5] if selected_day == 0 else [selected_day]
     for d in days_to_show:
@@ -85,11 +78,10 @@ def build_admin_panel_embed(
             if uid in snipers:
                 snipe_pts += pts
         d_label = f"J{d} {war_points.WAR_DAY_NAMES[d]}"
-        plan = str(day_plans.get(str(d), "PUSH"))[:7]
         snipe_col = f"{db.format_amount(snipe_pts)} ({len(snipers)})"
         ded_col = f"-{db.format_amount(ded_sum)}" if ded_sum > 0 else "0"
         table_lines.append(
-            f"{d_label:<14} | {plan:<7} | {db.format_amount(clan_pts):>12} | {snipe_col:>14} | {ded_col:>10}"
+            f"{d_label:<11} | {db.format_amount(clan_pts):>9} | {snipe_col:>13} | {ded_col:>7}"
         )
 
     # Global stock aggregation
@@ -328,40 +320,6 @@ class FilterView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=panel_view)
 
 
-class DayPlansModal(discord.ui.Modal):
-    def __init__(self, panel_view: "AdminPanelView"):
-        super().__init__(title="Plan Stratégique (J1 à J5)")
-        self.panel_view = panel_view
-        state = db.get_admin_state(panel_view.guild_id, db_path=panel_view.db_path)
-        try:
-            plans = json.loads(state.get("day_plans_json") or "{}")
-        except (TypeError, ValueError):
-            plans = {}
-        self.inputs: Dict[str, discord.ui.TextInput] = {}
-        for d in range(1, 6):
-            ti = discord.ui.TextInput(
-                label=f"Jour {d} ({war_points.WAR_DAY_NAMES[d]})",
-                placeholder="PUSH, SNIPE, ECO ou ALL-IN",
-                default=str(plans.get(str(d), "PUSH")),
-                required=True,
-                max_length=12,
-            )
-            self.inputs[str(d)] = ti
-            self.add_item(ti)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        new_plans = {k: ti.value.strip().upper()[:10] for k, ti in self.inputs.items()}
-        db.update_admin_state(
-            self.panel_view.guild_id,
-            {"day_plans_json": json.dumps(new_plans)},
-            db_path=self.panel_view.db_path,
-        )
-        embed = build_admin_panel_embed(
-            self.panel_view.guild_id, self.panel_view.clan_name, self.panel_view.emoji_map, db_path=self.panel_view.db_path
-        )
-        await interaction.response.edit_message(embed=embed, view=self.panel_view)
-
-
 class AdminPanelView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return await check_admin_access(interaction)
@@ -483,38 +441,7 @@ class AdminPanelView(discord.ui.View):
         embed = build_admin_panel_embed(self.guild_id, self.clan_name, self.emoji_map, db_path=self.db_path)
         await interaction.response.edit_message(embed=embed, view=new_view)
 
-    @discord.ui.button(label="Plan Jour", emoji="📋", style=discord.ButtonStyle.secondary, row=1)
-    async def plan_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(DayPlansModal(self))
-
-    @discord.ui.button(label="Export CSV", emoji="📤", style=discord.ButtonStyle.secondary, row=1)
-    async def export_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        profiles = db.get_all_profiles(db_path=self.db_path)
-        buf = io.StringIO()
-        writer = csv.writer(buf)
-        writer.writerow([
-            "id", "user_id", "pseudo", "puissance", "include_in_calc",
-            "marteaux", "competences", "cles_monture", "potions", "fioles_vertes", "oeufs",
-            "fusion_montures", "fusion_pets", "forge_level",
-            "max_forge", "max_competences", "max_montures", "max_oeufs",
-            "snipe_days", "pts_j1", "pts_j2", "pts_j3", "pts_j4", "pts_j5",
-        ])
-        for p in profiles:
-            uid = int(p["user_id"])
-            sdays = ",".join(str(d) for d in db.get_user_snipe_days(uid, db_path=self.db_path))
-            pts = [war_points.compute_day_potential(p, d)[0] for d in range(1, 6)]
-            writer.writerow([
-                p.get("short_id"), uid, p.get("pseudo"), p.get("puissance"), p.get("include_in_calc"),
-                p.get("marteaux"), p.get("competences"), p.get("cles_monture"), p.get("potions"),
-                p.get("fioles_vertes"), p.get("oeufs"), p.get("fusion_montures"), p.get("fusion_pets"),
-                p.get("forge_level"), p.get("max_forge"), p.get("max_competences"), p.get("max_montures"),
-                p.get("max_oeufs"), sdays, *pts,
-            ])
-        data = buf.getvalue().encode("utf-8")
-        file = discord.File(io.BytesIO(data), filename=f"baguette6_war_{datetime.now(war_points.PARIS_TZ).strftime('%Y%m%d')}.csv")
-        await interaction.response.send_message("📤 Export complet de la base clan :", file=file, ephemeral=True)
-
-    @discord.ui.button(label="Reset Déductions", emoji="🔄", style=discord.ButtonStyle.danger, row=1)
+    @discord.ui.button(label="Reset Déductions", emoji="🔄", style=discord.ButtonStyle.danger, row=0)
     async def reset_ded_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = db.get_admin_state(self.guild_id, db_path=self.db_path)
         sel = int(state.get("selected_day") or 0)

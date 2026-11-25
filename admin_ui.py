@@ -12,6 +12,18 @@ import profile_ui
 import scanner
 import war_points
 
+ADMIN_USER_IDS = {542655055803842572, 164319847021412352}
+
+
+async def check_admin_access(interaction: discord.Interaction) -> bool:
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ Accès refusé : cette commande est réservée aux administrateurs autorisés.",
+            ephemeral=True,
+        )
+        return False
+    return True
+
 
 def _get_active_day_for_details(selected_day: int, now: Optional[datetime] = None) -> int:
     if 1 <= selected_day <= 5:
@@ -206,6 +218,9 @@ def build_members_page_embed(
 
 
 class MembersPaginationView(discord.ui.View):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await check_admin_access(interaction)
+
     def __init__(
         self,
         guild_id: int,
@@ -247,6 +262,9 @@ class MembersPaginationView(discord.ui.View):
 
 
 class FilterView(discord.ui.View):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await check_admin_access(interaction)
+
     def __init__(
         self,
         guild_id: int,
@@ -345,6 +363,9 @@ class DayPlansModal(discord.ui.Modal):
 
 
 class AdminPanelView(discord.ui.View):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await check_admin_access(interaction)
+
     def __init__(
         self,
         guild_id: int,
@@ -563,6 +584,9 @@ class MemberSnipeModal(discord.ui.Modal):
 
 
 class MemberEditView(discord.ui.View):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await check_admin_access(interaction)
+
     def __init__(self, target_user_id: int, db_path: Optional[str] = None):
         super().__init__(timeout=300)
         self.target_user_id = target_user_id

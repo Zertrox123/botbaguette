@@ -271,6 +271,8 @@ async def war(interaction: discord.Interaction, jour: Optional[int] = None):
 @app_commands.allowed_installs(guilds=True, users=True)
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
 async def admin_panel(interaction: discord.Interaction):
+    if not await admin_ui.check_admin_access(interaction):
+        return
     guild_id = interaction.guild.id if interaction.guild else 0
     clan_name = interaction.guild.name if interaction.guild else "Baguette6"
     embed = admin_ui.build_admin_panel_embed(guild_id, clan_name, emoji_map)
@@ -283,6 +285,8 @@ async def admin_panel(interaction: discord.Interaction):
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
 @app_commands.describe(identifiant="ID court (ex: 1), pseudo ou @mention du membre")
 async def membre(interaction: discord.Interaction, identifiant: str):
+    if not await admin_ui.check_admin_access(interaction):
+        return
     profile = db.get_profile_by_identifier(identifiant)
     if not profile:
         return await interaction.response.send_message(

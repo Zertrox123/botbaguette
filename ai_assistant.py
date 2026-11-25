@@ -1,8 +1,9 @@
 import asyncio
+from collections import deque
 import glob
 import json
 import os
-from typing import Optional
+from typing import Deque, Dict, Optional
 import aiohttp
 
 import db
@@ -13,6 +14,9 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
 AI_MODEL = os.getenv("AI_MODEL", "qwen2.5:1.5b")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Mémoire courte des 6 derniers échanges (12 messages) du salon IA
+_CHAT_HISTORY: Deque[Dict[str, str]] = deque(maxlen=12)
+
 _CODE_KEYWORDS = (
     "code", "bug", "fichier", "fonction", "script", "python", "ocr", "scan",
     "calcul", "formule", "sql", "db", "command", "erreur", "impl", "modifier",
@@ -20,7 +24,7 @@ _CODE_KEYWORDS = (
 
 
 def build_database_context(db_path: Optional[str] = None) -> str:
-    """Build a compact snapshot of the entire SQLite database for the 2B model."""
+    """Build a compact snapshot of the entire SQLite database for the local model."""
     profiles = db.get_all_profiles(db_path=db_path)
     lines = ["=== DB PROFILS ==="]
     for p in profiles:
@@ -28,13 +32,13 @@ def build_database_context(db_path: Optional[str] = None) -> str:
         sdays = db.get_user_snipe_days(uid, db_path=db_path)
         pts = [war_points.compute_day_potential(p, d)[0] for d in range(1, 6)]
         lines.append(
-            f"id={p.get('short_id')} {p.get('pseudo')}({p.get('puissance') or '?'}) "
-            f"calc={p.get('include_in_calc')} F={p.get('forge_level')} "
-            f"M={p.get('marteaux')} C={p.get('competences')} CM={p.get('cles_monture')} "
-            f"P={p.get('potions')} FV={p.get('fioles_vertes')} O={p.get('oeufs')} "
-            f"FM={p.get('fusion_montures')} FP={p.get('fusion_pets')} "
-            f"max=({p.get('max_forge')},{p.get('max_competences')},{p.get('max_montures')},{p.get('max_oeufs')}) "
-            f"snipe={sdays} J1-5={pts}"
+            f"id={p.get('short_id')} pseudo={p.get('pseudo')} puissance={p.get('puissance') or 'inconnue'} "
+            f"calc={p.get('include_in_calc')} Forge={p.get('forge_level')} "
+            f"Marteaux={p.get('marteaux')} Comp={p.get('competences')} ClesM={p.get('cles_monture')} "
+            f"Potions={p.get('potions')} FiolesV={p.get('fioles_vertes')} Oeufs={p.get('oeufs')} "
+            f"FusM={p.get('fusion_montures')} FusP={p.get('fusion_pets')} "
+            f"Max(F/C/M/O)=({p.get('max_forge')},{p.get('max_competences')},{p.get('max_montures')},{p.get('max_oeufs')}) "
+            f"Snipe={sdays} Pts_J1_a_J5={pts}"
         )
     ded_lines = []
     for d in range(1, 6):
@@ -46,12 +50,16 @@ def build_database_context(db_path: Optional[str] = None) -> str:
     return "\n".join(lines)
 
 
-def build_code_context(prompt: str = "", max_chars: int = 1800) -> str:
+def build_code_context(prompt: str = "", max_chars: int = 1600) -> str:
     """Include a compact file list always, and code excerpts when the question is about code/logic."""
-    files = [os.path.basename(p) for p in sorted(glob.glob(os.path.join(BASE_DIR, "*.py"))) if os.path.basename(p) != "credential.py"]
+    files = [
+        os.path.basename(p)
+        for p in sorted(glob.glob(os.path.join(BASE_DIR, "*.py")))
+        if os.path.basename(p) != "credential.py"
+    ]
     low = prompt.lower()
     if not any(kw in low for kw in _CODE_KEYWORDS):
-        return "Fichiers bot: " + ", ".join(files)
+        return "Fichiers du bot : " + ", ".join(files)
 
     chunks = ["=== EXTRAITS CODE ==="]
     total = 0
@@ -62,7 +70,7 @@ def build_code_context(prompt: str = "", max_chars: int = 1800) -> str:
                     src = f.read()
             except OSError:
                 continue
-            snippet = src[:450]
+            snippet = src[:400]
             entry = f"\n[{name}]\n{snippet}"
             if total + len(entry) > max_chars:
                 break
@@ -71,27 +79,37 @@ def build_code_context(prompt: str = "", max_chars: int = 1800) -> str:
     return "\n".join(chunks)
 
 
-async def ask_local_ai(prompt: str, db_path: Optional[str] = None) -> str:
-    """Query the local 2B Ollama model with fast, compact DB + codebase context."""
+async def ask_local_ai(
+    prompt: str,
+    author_name: str = "Utilisateur",
+    db_path: Optional[str] = None,
+) -> str:
+    """Query the local Ollama model with author identity, short chat memory, and live DB context."""
     db_ctx = build_database_context(db_path=db_path)
     code_ctx = build_code_context(prompt)
 
     system_prompt = (
-        "Assistant IA du bot ForgeMaster War (clan Baguette6). "
-        "Réponds en français, de façon directe et chiffrée. "
-        "Légende DB: M=marteaux, C=compétences, CM=clés monture, P=potions, FV=fioles vertes, O=œufs, FM/FP=fusions, J1-5=points potentiels.\n"
+        "Tu es l'assistant IA du bot Discord ForgeMaster War pour le jeu mobile Forge Master (clan Baguette6). "
+        "Règles strictes :\n"
+        "- Réponds en français, court, direct et précis.\n"
+        "- Tu connais le pseudo de la personne qui te parle (indiqué entre crochets [Pseudo]).\n"
+        "- N'attribue JAMAIS les stats d'un joueur à un autre joueur.\n"
+        "- Si un joueur n'apparaît pas dans DB PROFILS, dis clairement qu'il n'a pas encore enregistré son profil (/profil ou /scan).\n"
+        "- N'invente jamais de jeu (c'est Forge Master, pas Minecraft) ni de chiffres absents de la DB.\n\n"
         f"{db_ctx}\n{code_ctx}"
     )
+
+    user_msg = f"[{author_name}] : {prompt}"
+    messages = [{"role": "system", "content": system_prompt}]
+    messages.extend(list(_CHAT_HISTORY))
+    messages.append({"role": "user", "content": user_msg})
 
     payload = {
         "model": AI_MODEL,
         "stream": False,
         "keep_alive": "30m",
-        "options": {"num_predict": 350, "temperature": 0.4},
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ],
+        "options": {"num_predict": 300, "temperature": 0.15},
+        "messages": messages,
     }
 
     timeout = aiohttp.ClientTimeout(total=180)
@@ -102,7 +120,10 @@ async def ask_local_ai(prompt: str, db_path: Optional[str] = None) -> str:
                     txt = await resp.text()
                     return f"⚠️ Erreur `{AI_MODEL}` (HTTP {resp.status}) : `{txt[:200]}`"
                 data = await resp.json()
-                return (data.get("message", {}).get("content") or "").strip() or "*(Réponse vide du modèle)*"
+                reply = (data.get("message", {}).get("content") or "").strip() or "*(Réponse vide du modèle)*"
+                _CHAT_HISTORY.append({"role": "user", "content": user_msg})
+                _CHAT_HISTORY.append({"role": "assistant", "content": reply})
+                return reply
     except asyncio.TimeoutError:
         return f"⏳ Le modèle `{AI_MODEL}` a mis trop de temps à répondre (CPU occupé). Réessaie avec une question plus courte."
     except Exception as exc:

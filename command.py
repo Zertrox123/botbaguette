@@ -306,7 +306,10 @@ async def on_message(message: discord.Message):
         return
     if message.channel.id == ai_assistant.AI_CHANNEL_ID and message.content.strip():
         async with message.channel.typing():
-            reply = await ai_assistant.ask_local_ai(message.content.strip())
+            reply = await ai_assistant.ask_local_ai(
+                message.content.strip(),
+                author_name=message.author.display_name,
+            )
         # Chunk response cleanly under Discord's 2000-char limit
         for i in range(0, len(reply), 1950):
             await message.reply(reply[i : i + 1950], mention_author=False)

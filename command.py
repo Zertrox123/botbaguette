@@ -1,5 +1,6 @@
 import asyncio
 import os
+import random
 from typing import Dict, Optional
 import discord
 from discord import app_commands
@@ -312,6 +313,20 @@ async def membre(interaction: discord.Interaction, identifiant: str):
     embed = admin_ui.build_member_admin_embed(profile, sdays, deductions=deds)
     view = admin_ui.MemberEditView(uid)
     await interaction.response.send_message(embed=embed, view=view)
+
+
+@bot.tree.command(name="spam", description="Ping aléatoirement un admin x fois (max 10)")
+@app_commands.allowed_installs(guilds=True, users=True)
+@app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+@app_commands.describe(x="Nombre de pings (1 à 10)")
+async def spam(interaction: discord.Interaction, x: app_commands.Range[int, 1, 10]):
+    if not await admin_ui.check_admin_access(interaction):
+        return
+    target_id = random.choice(sorted(admin_ui.ADMIN_USER_IDS))
+    await interaction.response.send_message(f"🎯 Cible choisie : <@{target_id}> ({x}x)")
+    for _ in range(x):
+        await asyncio.sleep(0.5)
+        await interaction.followup.send(f"<@{target_id}>")
 
 
 @bot.event

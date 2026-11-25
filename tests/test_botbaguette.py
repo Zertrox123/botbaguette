@@ -349,6 +349,12 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ASCENSION", panel_embed.description)
         self.assertIn("Plolipop", panel_embed.fields[2].value)
 
+        # Incompatible resource_filter resets to 'all' when switching to another day
+        db.update_admin_state(999, {"selected_day": 2, "ascension_only": 0, "resource_filter": "competences"}, db_path=self.db_path)
+        panel_embed_j2 = admin_ui.build_admin_panel_embed(999, "Baguette6", emoji_map={}, db_path=self.db_path)
+        self.assertIn("**Filtre :** `Tout`", panel_embed_j2.description)
+        self.assertEqual(db.get_admin_state(999, db_path=self.db_path)["resource_filter"], "all")
+
         # Members page embed + /membre lookup by short_id
         found = db.get_profile_by_identifier(str(sid), db_path=self.db_path)
         self.assertEqual(found["user_id"], 42)

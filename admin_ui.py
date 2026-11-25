@@ -40,6 +40,10 @@ def build_admin_panel_embed(
     state = db.get_admin_state(guild_id, db_path=db_path)
     selected_day = int(state.get("selected_day") or 0)
     res_filter = str(state.get("resource_filter") or "all")
+    valid_res = war_points.DAY_VALID_RESOURCES.get(selected_day)
+    if valid_res is not None and res_filter != "all" and res_filter not in valid_res:
+        res_filter = "all"
+        db.update_admin_state(guild_id, {"resource_filter": "all"}, db_path=db_path)
     ascension_only = bool(int(state.get("ascension_only") or 0))
 
     profiles = db.get_all_profiles(db_path=db_path)
@@ -272,20 +276,36 @@ class FilterView(discord.ui.View):
         state = db.get_admin_state(guild_id, db_path=db_path)
         self.cur_res = str(state.get("resource_filter") or "all")
         self.cur_day = int(state.get("selected_day") or 0)
+        valid = war_points.DAY_VALID_RESOURCES.get(self.cur_day)
+        if valid is not None and self.cur_res != "all" and self.cur_res not in valid:
+            self.cur_res = "all"
 
-        res_options = [
-            discord.SelectOption(label=lbl, value=k, default=(k == self.cur_res))
-            for k, lbl in war_points.RESOURCE_FILTER_LABELS.items()
-        ]
-        res_select = discord.ui.Select(
+        self.res_select = discord.ui.Select(
             placeholder="Choisir la ressource à calculer",
-            options=res_options,
+            options=self._res_options(),
             row=0,
         )
-        res_select.callback = self._on_res_change
-        self.add_item(res_select)
+        self.res_select.callback = self._on_res_change
+        self.add_item(self.res_select)
 
-        day_options = [
+        self.day_select = discord.ui.Select(
+            placeholder="Choisir le jour de guerre",
+            options=self._day_options(),
+            row=1,
+        )
+        self.day_select.callback = self._on_day_change
+        self.add_item(self.day_select)
+
+    def _res_options(self) -> List[discord.SelectOption]:
+        valid = war_points.DAY_VALID_RESOURCES.get(self.cur_day)
+        return [
+            discord.SelectOption(label=lbl, value=k, default=(k == self.cur_res))
+            for k, lbl in war_points.RESOURCE_FILTER_LABELS.items()
+            if k == "all" or valid is None or k in valid
+        ]
+
+    def _day_options(self) -> List[discord.SelectOption]:
+        return [
             discord.SelectOption(label="Vue Globale (J1 → J5)", value="0", default=(self.cur_day == 0)),
             discord.SelectOption(label="Jour 1 — Mardi", value="1", default=(self.cur_day == 1)),
             discord.SelectOption(label="Jour 2 — Mercredi", value="2", default=(self.cur_day == 2)),
@@ -293,23 +313,27 @@ class FilterView(discord.ui.View):
             discord.SelectOption(label="Jour 4 — Vendredi", value="4", default=(self.cur_day == 4)),
             discord.SelectOption(label="Jour 5 — Samedi", value="5", default=(self.cur_day == 5)),
         ]
-        day_select = discord.ui.Select(
-            placeholder="Choisir le jour de guerre",
-            options=day_options,
-            row=1,
-        )
-        day_select.callback = self._on_day_change
-        self.add_item(day_select)
+
+    def _sync_selects(self) -> None:
+        self.res_select.options = self._res_options()
+        self.day_select.options = self._day_options()
 
     async def _on_res_change(self, interaction: discord.Interaction):
         self.cur_res = interaction.data["values"][0]
         db.update_admin_state(self.guild_id, {"resource_filter": self.cur_res}, db_path=self.db_path)
+        self._sync_selects()
         embed = build_admin_panel_embed(self.guild_id, self.clan_name, self.emoji_map, db_path=self.db_path)
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_day_change(self, interaction: discord.Interaction):
         self.cur_day = int(interaction.data["values"][0])
-        db.update_admin_state(self.guild_id, {"selected_day": self.cur_day}, db_path=self.db_path)
+        updates: Dict[str, Any] = {"selected_day": self.cur_day}
+        valid = war_points.DAY_VALID_RESOURCES.get(self.cur_day)
+        if valid is not None and self.cur_res != "all" and self.cur_res not in valid:
+            self.cur_res = "all"
+            updates["resource_filter"] = "all"
+        db.update_admin_state(self.guild_id, updates, db_path=self.db_path)
+        self._sync_selects()
         embed = build_admin_panel_embed(self.guild_id, self.clan_name, self.emoji_map, db_path=self.db_path)
         await interaction.response.edit_message(embed=embed, view=self)
 

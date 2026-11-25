@@ -111,6 +111,14 @@ RESOURCE_FILTER_LABELS: Dict[str, str] = {
     "fusion_pets": "Fusion Pets",
 }
 
+DAY_VALID_RESOURCES: Dict[int, set] = {
+    1: {"marteaux", "competences"},
+    2: {"cles_monture", "fusion_montures"},
+    3: {"marteaux", "competences", "oeufs", "fusion_pets"},
+    4: {"cles_monture", "fusion_montures"},
+    5: {"marteaux", "oeufs", "fusion_pets"},
+}
+
 
 def compute_day_potential(
     profile: Dict[str, Any],

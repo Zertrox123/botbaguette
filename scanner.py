@@ -4,7 +4,9 @@ import json
 import re
 import unicodedata
 from typing import Dict, Any, List, Optional, Tuple
-from PIL import Image, ImageDraw, ImageEnhance, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageFile, ImageOps
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 import db
 import war_points

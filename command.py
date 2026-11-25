@@ -196,8 +196,11 @@ async def scan(
     for att in attachments:
         if att.content_type and not att.content_type.startswith("image/"):
             continue
-        raw = await att.read()
-        result = await asyncio.to_thread(scanner.scan_image_bytes, raw)
+        try:
+            raw = await att.read()
+            result = await asyncio.to_thread(scanner.scan_image_bytes, raw)
+        except Exception:
+            continue
         merged_visible.update(result.get("visible", {}))
         merged_secret.update(result.get("secret", {}))
 
@@ -327,8 +330,11 @@ async def on_message(message: discord.Message):
 
         imgs = [a for a in message.attachments if not a.content_type or a.content_type.startswith("image/")]
         for att in imgs[:10]:
-            raw = await att.read()
-            result = await asyncio.to_thread(scanner.scan_image_bytes, raw)
+            try:
+                raw = await att.read()
+                result = await asyncio.to_thread(scanner.scan_image_bytes, raw)
+            except Exception:
+                continue
             merged_visible.update(result.get("visible", {}))
             merged_secret.update(result.get("secret", {}))
 
@@ -339,7 +345,10 @@ async def on_message(message: discord.Message):
                 description="Profil mis à jour avec succès",
                 color=discord.Color.from_rgb(46, 204, 113),
             )
-            await message.reply(embed=embed, mention_author=False)
+            try:
+                await message.reply(embed=embed, mention_author=False)
+            except discord.HTTPException:
+                pass
         return
 
     if message.channel.id == ai_assistant.AI_CHANNEL_ID and message.content.strip():

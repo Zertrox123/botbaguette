@@ -150,7 +150,7 @@ def _build_system_prompt(author_name: str, db_ctx: str, code_ctx: str) -> str:
         f"La personne qui te parle actuellement s'appelle {author_name}.\n"
         "Règles strictes :\n"
         "- Tu AS accès en direct à toute la base de données dans DB PROFILS et à tout le code source du bot ci-dessous.\n"
-        "- Réponds en français, SOIS TRÈS BREF et direct : 1 à 3 phrases courtes max (ou 3-5 puces courtes si liste). Zéro blabla, zéro intro, zéro conclusion, ne répète jamais la question ni le pseudo entre crochets.\n"
+        "- Réponds en français, de façon claire, naturelle et concise : va droit au but avec les chiffres et explications utiles, sans pavé inutile ni formules de politesse superflues (ne répète jamais le pseudo entre crochets).\n"
         "- N'attribue JAMAIS les stats d'un joueur à un autre joueur.\n"
         "- Si un joueur n'apparaît pas dans DB PROFILS, dis simplement qu'il n'a pas encore enregistré son profil (/profil ou /scan).\n"
         "- N'invente jamais de chiffres absents de la DB.\n\n"

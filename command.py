@@ -275,7 +275,7 @@ async def war(interaction: discord.Interaction, jour: Optional[int] = None, mode
         resource_filter="all",
         ascension_only=(mode == "ascension"),
     )
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, view=profile_ui.WarView(lambda: emoji_map))
 
 
 @bot.tree.command(name="admin", description="Ouvre le Panel Admin Stratégie de Guerre (format PC)")
@@ -357,6 +357,7 @@ async def on_ready():
     global emoji_map
     db.init_db()
     emoji_map = await profile_ui.sync_application_emojis(bot)
+    bot.add_view(profile_ui.WarView(lambda: emoji_map))
     print(f"Connecté en tant que {bot.user} ({len(emoji_map)}/{len(profile_ui.EMOJI_SPECS)} assets chargés)")
     try:
         synced = await bot.tree.sync()

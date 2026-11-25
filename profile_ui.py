@@ -275,6 +275,28 @@ def build_war_embed(
     return embed
 
 
+class WarView(discord.ui.View):
+    def __init__(self, emoji_map_provider, db_path: Optional[str] = None):
+        super().__init__(timeout=None)
+        self._emoji_map_provider = emoji_map_provider
+        self.db_path = db_path
+
+    @discord.ui.button(
+        label="Profil",
+        emoji="👤",
+        style=discord.ButtonStyle.primary,
+        custom_id="war_open_profile",
+    )
+    async def open_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
+        emap = self._emoji_map_provider() if callable(self._emoji_map_provider) else self._emoji_map_provider
+        profile = db.get_or_create_profile(
+            interaction.user.id, interaction.user.display_name, db_path=self.db_path
+        )
+        embed = build_profile_embed(profile, interaction.user.display_name, emap, can_edit=True)
+        view = ProfileView(interaction.user.id, emap, db_path=self.db_path)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
 class AmountModal(discord.ui.Modal):
     def __init__(
         self,

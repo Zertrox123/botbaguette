@@ -315,17 +315,17 @@ async def membre(interaction: discord.Interaction, identifiant: str):
     await interaction.response.send_message(embed=embed, view=view)
 
 
-@bot.tree.command(name="spam", description="Ping aléatoirement un admin x fois (max 10)")
+@bot.tree.command(name="spam", description="Ping aléatoirement un admin entre 1 et 15 fois")
 @app_commands.allowed_installs(guilds=True, users=True)
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-@app_commands.describe(x="Nombre de pings (1 à 10)")
-async def spam(interaction: discord.Interaction, x: app_commands.Range[int, 1, 10]):
+async def spam(interaction: discord.Interaction):
     if not await admin_ui.check_admin_access(interaction):
         return
     target_id = random.choice(sorted(admin_ui.ADMIN_USER_IDS))
-    await interaction.response.send_message(f"🎯 Cible choisie : <@{target_id}> ({x}x)")
-    for _ in range(x):
-        await asyncio.sleep(0.5)
+    count = random.randint(1, 15)
+    await interaction.response.send_message(f"🎯 Cible choisie : <@{target_id}> ({count}x)")
+    for _ in range(count):
+        await asyncio.sleep(0.6)
         await interaction.followup.send(f"<@{target_id}>")
 
 

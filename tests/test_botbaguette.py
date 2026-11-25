@@ -411,5 +411,192 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Plolipop", ctx)
 
 
+class TestProfileTextParser(unittest.TestCase):
+    def test_real_discord_messages_batch_1(self):
+        # Jasnc
+        r = scanner.parse_profile_text(
+            "Forge ⭐ niv34 4m gold 30k marteaux\n"
+            "Animaux ⭐ max 27k\n"
+            "Montures ⭐ max 10k\n"
+            "Competences ⭐ niv77 22k\n"
+            "Fioles 1.96"
+        )
+        self.assertEqual(r["visible"], {
+            "marteaux": 30000,
+            "oeufs": 27000,
+            "cles_monture": 10000,
+            "competences": 22000,
+            "fioles_vertes": 1960,
+        })
+        self.assertEqual(r["secret"]["forge_level"], 34)
+        self.assertEqual(r["secret"]["max_forge"], 0)
+        self.assertEqual(r["secret"]["max_oeufs"], 1)
+        self.assertEqual(r["secret"]["max_montures"], 1)
+        self.assertEqual(r["secret"]["max_competences"], 0)
+
+        # LEGANDARIAN
+        r = scanner.parse_profile_text(
+            "Forge ⭐⭐ niveau 12 / 1,69 M gold et 115k marteaux\n"
+            "Animaux ⭐⭐ LVL 50 : 6,5 K coquilles\n"
+            "Monture ⭐ LVL 100 : 32,9k\n"
+            "Compétences ⭐ LVL 86 : 17,8k\n"
+            "Fioles 2,15k"
+        )
+        self.assertEqual(r["visible"], {
+            "marteaux": 115000,
+            "oeufs": 6500,
+            "cles_monture": 32900,
+            "competences": 17800,
+            "fioles_vertes": 2150,
+        })
+        self.assertEqual(r["secret"]["forge_level"], 12)
+        self.assertEqual(r["secret"]["forge_avg_j1"], 5.0)
+        self.assertEqual(r["secret"]["max_montures"], 1)
+        self.assertEqual(r["secret"]["max_oeufs"], 0)
+
+        # CommanderZorg (Animaux has level only, no eggs amount)
+        r = scanner.parse_profile_text(
+            "Forge ⭐⭐ niveau 14 / 9,69 M gold et 98219 marteaux\n"
+            "Animaux ⭐⭐ LVL 86\n"
+            "Monture ⭐ LVL 100 : 49,8K - 1978 fusions\n"
+            "Compétences ⭐ LVL 100 : 107K\n"
+            "Fioles: 2890"
+        )
+        self.assertEqual(r["visible"], {
+            "marteaux": 98219,
+            "cles_monture": 49800,
+            "fusion_montures": 1978,
+            "competences": 107000,
+            "fioles_vertes": 2890,
+        })
+        self.assertNotIn("oeufs", r["visible"])
+        self.assertEqual(r["secret"]["max_montures"], 1)
+        self.assertEqual(r["secret"]["max_competences"], 1)
+
+        # kojocik (Animaux has fusions only, no eggs)
+        r = scanner.parse_profile_text(
+            "Animaux⭐⭐ LVL 76 - 113 fusions\n"
+            "Monture LVL 100 : 117K - 752 fusions\n"
+            "Compétences ⭐ LVL 100 : 82K\n"
+            "Fioles: 2670"
+        )
+        self.assertEqual(r["visible"], {
+            "fusion_pets": 113,
+            "cles_monture": 117000,
+            "fusion_montures": 752,
+            "competences": 82000,
+            "fioles_vertes": 2670,
+        })
+        self.assertNotIn("oeufs", r["visible"])
+
+        # PrGx (fusions before number + coquilles d'œufs + 2.510 thousands dot)
+        r = scanner.parse_profile_text(
+            "Forge ⭐ niveau 32 / 4,71 M gold et 166413 marteaux\n"
+            "Animaux ⭐ LVL 100 - fusions 568 - coquilles d'œufs 77,5k\n"
+            "Monture ⭐ LVL 98 : 13,7K - 1938 fusions\n"
+            "Compétences ⭐ LVL 77 : 46,5K\n"
+            "Fioles: 2.510"
+        )
+        self.assertEqual(r["visible"], {
+            "marteaux": 166413,
+            "fusion_pets": 568,
+            "oeufs": 77500,
+            "cles_monture": 13700,
+            "fusion_montures": 1938,
+            "competences": 46500,
+            "fioles_vertes": 2510,
+        })
+        self.assertEqual(r["secret"]["max_oeufs"], 1)
+        self.assertEqual(r["secret"]["max_montures"], 0)
+
+        # Hitaru (space thousands '95 584', '1 905', explicit 0 eggs)
+        r = scanner.parse_profile_text(
+            "Forge ⭐ niveau 21 / 9,48 M gold et 95 584 marteaux\n"
+            "Animaux ⭐⭐ LVL 73 - fusions 244 - coquilles d'œufs 0\n"
+            "Monture ⭐ LVL 100 : 37.8K - 1 905 fusions"
+        )
+        self.assertEqual(r["visible"], {
+            "marteaux": 95584,
+            "fusion_pets": 244,
+            "oeufs": 0,
+            "cles_monture": 37800,
+            "fusion_montures": 1905,
+        })
+
+    def test_real_discord_messages_batch_2_and_chat_guard(self):
+        # Sylverte (Clan tech + clefs + space before K)
+        r = scanner.parse_profile_text(
+            "Monture ⭐ niveau 100 : 55,3 K clefs\n"
+            "Compétences ⭐ niveau 77 : 96,3 K tickets\n"
+            "Animaux ⭐⭐ niveau 50 : 6,9 K coquilles\n"
+            "Clan tech : 2,71 K fioles\n"
+            "Forge ⭐⭐ niveau 17 : 158 K marteaux"
+        )
+        self.assertEqual(r["visible"], {
+            "cles_monture": 55300,
+            "competences": 96300,
+            "oeufs": 6900,
+            "fioles_vertes": 2710,
+            "marteaux": 158000,
+        })
+
+        # Azealion (bold markdown + double colons + Fioles vertes)
+        r = scanner.parse_profile_text(
+            "**Forge** ⭐⭐ : : lvl 18 / 31.5k Marteaux\n"
+            "**Compétences** ⭐ : lvl 100 / 84.7k Tickets\n"
+            "**Animaux** ⭐⭐ : : lvl 54 / 17.8k Coquilles\n"
+            "**Monture** ⭐ : lvl 100 / 52.8k Clefs\n"
+            "**Fioles vertes** : 2.78k"
+        )
+        self.assertEqual(r["visible"], {
+            "marteaux": 31500,
+            "competences": 84700,
+            "oeufs": 17800,
+            "cles_monture": 52800,
+            "fioles_vertes": 2780,
+        })
+
+        # Silversnake (no space after star + Forge level only)
+        r = scanner.parse_profile_text(
+            "Monture ⭐ niveau 100 : 43,2 K\n"
+            "Compétences ⭐ niveau 100 : 90.8 K\n"
+            "Animaux ⭐niveau 100 : 92,1 K\n"
+            "Forge ⭐⭐ niveau 8"
+        )
+        self.assertEqual(r["visible"], {
+            "cles_monture": 43200,
+            "competences": 90800,
+            "oeufs": 92100,
+        })
+        self.assertNotIn("marteaux", r["visible"])
+        self.assertEqual(r["secret"]["forge_level"], 8)
+
+        # Taborlin - Hepta (singular fusion + no stars)
+        r = scanner.parse_profile_text(
+            "Monture niveau 100 : 17.9K clefs\n"
+            "Compétences niveau 77 : 9 K tickets\n"
+            "Animaux ⭐niveau 38 : 390 fusion\n"
+            "Clan tech : 893 fioles\n"
+            "Forge niveau 31 : 113 K marteaux"
+        )
+        self.assertEqual(r["visible"], {
+            "cles_monture": 17900,
+            "competences": 9000,
+            "fusion_pets": 390,
+            "fioles_vertes": 893,
+            "marteaux": 113000,
+        })
+        self.assertNotIn("oeufs", r["visible"])
+        self.assertEqual(r["secret"]["forge_level"], 31)
+
+        # Casual chat must not trigger false positives
+        chat = scanner.parse_profile_text(
+            "Salut tout le monde, merci pour la guerre !\n"
+            "Tu as combien de marteaux à la forge ?\n"
+            "Je vais farm mes 20k tickets ce soir"
+        )
+        self.assertEqual(chat, {"visible": {}, "secret": {}})
+
+
 if __name__ == "__main__":
     unittest.main()

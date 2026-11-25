@@ -5,12 +5,11 @@ import re
 import unicodedata
 from typing import Dict, Any, List, Optional, Tuple
 from PIL import Image, ImageDraw, ImageEnhance, ImageOps
-from rapidocr_onnxruntime import RapidOCR
 
 import db
 import war_points
 
-_OCR_ENGINE: Optional[RapidOCR] = None
+_OCR_ENGINE: Any = None
 
 _NUM_RE = re.compile(r"([0-9]+(?:[.,][0-9]+)?\s*[kmbt]?)", re.IGNORECASE)
 _INVOKE_MULT_RE = re.compile(r"x\s*(\d+)\b", re.IGNORECASE)
@@ -27,9 +26,10 @@ _MOUNT_HINTS = ("montures", "mounts", "monturas", "reittiere", "montarias")
 _FORGE_HINTS = ("forge", "forja", "schmiede", "forjar")
 
 
-def _get_ocr() -> RapidOCR:
+def _get_ocr():
     global _OCR_ENGINE
     if _OCR_ENGINE is None:
+        from rapidocr_onnxruntime import RapidOCR
         # Disable 180-degree rotation classifier so symmetric numbers ('90,700') never flip upside-down
         _OCR_ENGINE = RapidOCR(use_cls=False)
     return _OCR_ENGINE
@@ -714,3 +714,180 @@ def match_player_name(ocr_name: str, profiles: List[Dict[str, Any]]) -> Optional
             best_score = score
             best_p = p
     return best_p if best_score >= 0.72 else None
+
+
+# ── Text-based profile parser (for manual status posts in auto-scan channel) ──
+
+_TXT_NUM_PAT = r"(?:\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d+(?:[.,]\d+)?)\s*[km]?(?![a-z0-9])"
+_TXT_NUM_RE = re.compile(_TXT_NUM_PAT, re.IGNORECASE)
+_TXT_LEVEL_RE = re.compile(r"\b(?:niveau|niv\.?|lvl\.?|lv\.?)\s*[:=]?\s*(\d{1,3})\b", re.IGNORECASE)
+_TXT_MAX_RE = re.compile(r"\bmax(?:imise|ed|imo)?\b", re.IGNORECASE)
+_TXT_GOLD_RE = re.compile(
+    rf"(?:{_TXT_NUM_PAT}\s*(?:gold|or|po|pieces?)\b|\b(?:gold|or|po)\s*[:=]?\s*{_TXT_NUM_PAT})",
+    re.IGNORECASE,
+)
+_TXT_FUSION_AFTER_RE = re.compile(rf"({_TXT_NUM_PAT})\s*fusions?\b", re.IGNORECASE)
+_TXT_FUSION_BEFORE_RE = re.compile(rf"\bfusions?\s*[:=]?\s*({_TXT_NUM_PAT})", re.IGNORECASE)
+
+_TXT_CATEGORY_PREFIXES = (
+    ("forge", re.compile(r"^(?:forge|marteaux?|hammers?)\b", re.IGNORECASE)),
+    ("animals", re.compile(r"^(?:animaux?|animal|pets?|oeufs?|coquilles?)\b", re.IGNORECASE)),
+    ("mounts", re.compile(r"^(?:montures?|mounts?|clefs?|cles?|keys?)\b", re.IGNORECASE)),
+    ("skills", re.compile(r"^(?:competences?|comp\b|skills?|tickets?)\b", re.IGNORECASE)),
+    ("fioles", re.compile(r"^(?:fioles?(?:\s+vertes?)?|clan\s*tech|techno(?:logie)?|vials?)\b", re.IGNORECASE)),
+    ("potions", re.compile(r"^(?:potions?)\b", re.IGNORECASE)),
+    ("puissance", re.compile(r"^(?:puissance|power|pwr)\b", re.IGNORECASE)),
+)
+
+_TXT_CATEGORY_FIELD = {
+    "forge": "marteaux",
+    "animals": "oeufs",
+    "mounts": "cles_monture",
+    "skills": "competences",
+    "fioles": "fioles_vertes",
+    "potions": "potions",
+}
+
+_TXT_CATEGORY_EXPLICIT_KW = {
+    "forge": r"(?:marteaux?|hammers?)",
+    "animals": r"(?:coquilles?(?:\s*d['’]?\s*oeufs?)?|oeufs?|eggs?)",
+    "mounts": r"(?:clefs?|cles?|keys?)",
+    "skills": r"(?:tickets?|skills?|competences?)",
+    "fioles": r"(?:fioles?(?:\s+vertes?)?|vials?)",
+    "potions": r"(?:potions?)",
+}
+
+
+def _parse_text_amount(raw: str, short_k_decimal: bool = False) -> Optional[int]:
+    s = raw.strip().replace("\u202f", " ").replace("\u00a0", " ")
+    if not s:
+        return None
+    suffix = ""
+    if s[-1].lower() in ("k", "m"):
+        suffix = s[-1].lower()
+        s = s[:-1].strip()
+    compact = s.replace(" ", "")
+    if not suffix:
+        # European thousands separator (e.g. '2.510' -> 2510)
+        if re.fullmatch(r"\d{1,3}(?:\.\d{3})+", compact):
+            return int(compact.replace(".", ""))
+        # Shorthand decimals on fioles (e.g. 'Fioles 1.96' -> 1960)
+        if short_k_decimal and re.fullmatch(r"\d{1,2}[.,]\d{1,2}", compact):
+            return int(round(float(compact.replace(",", ".")) * 1_000))
+    try:
+        val = float(compact.replace(",", "."))
+    except ValueError:
+        return None
+    mult = 1_000 if suffix == "k" else (1_000_000 if suffix == "m" else 1)
+    out = int(round(val * mult))
+    return out if out >= 0 else None
+
+
+def parse_profile_text(text: str) -> Dict[str, Dict[str, Any]]:
+    """Parse manual Forge Master status messages (French/English) into {'visible': ..., 'secret': ...}."""
+    visible: Dict[str, Any] = {}
+    secret: Dict[str, Any] = {}
+    if not text or not text.strip():
+        return {"visible": visible, "secret": secret}
+
+    for raw_line in text.splitlines():
+        raw_line = raw_line.strip()
+        if not raw_line or len(raw_line) > 140 or "?" in raw_line:
+            continue
+
+        stars = (
+            raw_line.count("⭐")
+            + raw_line.count("★")
+            + raw_line.count("🌟")
+            + len(re.findall(r":star\d*:", raw_line, re.IGNORECASE))
+        )
+        # Replace star emojis/shortcodes with spaces so 'Animaux⭐niveau 38' tokenizes cleanly
+        cleaned = re.sub(r"[⭐★🌟]|:star\d*:", " ", raw_line, flags=re.IGNORECASE)
+        cleaned = re.sub(r"[*_`~>]", "", cleaned)
+        cleaned = re.sub(r"^[\s\-•▪▸]+", "", cleaned)
+        norm = _norm(cleaned).replace("œ", "oe")
+        if not norm:
+            continue
+
+        cat = None
+        rest = norm
+        for c_name, rx in _TXT_CATEGORY_PREFIXES:
+            m = rx.match(norm)
+            if m:
+                cat = c_name
+                rest = norm[m.end():].strip()
+                break
+        if cat is None or not rest:
+            continue
+
+        if cat == "puissance":
+            try:
+                visible["puissance"] = db.normalize_power(rest)
+            except ValueError:
+                pass
+            continue
+
+        # 1. Extract & strip level / max keywords so level numbers aren't mistaken for resources
+        lvl: Optional[int] = None
+        lm = _TXT_LEVEL_RE.search(rest)
+        if lm:
+            lvl = int(lm.group(1))
+            rest = rest[:lm.start()] + " " + rest[lm.end():]
+
+        has_max = False
+        mm = _TXT_MAX_RE.search(rest)
+        if mm:
+            has_max = True
+            rest = rest[:mm.start()] + " " + rest[mm.end():]
+
+        if cat == "forge":
+            if lvl is not None:
+                clamped = max(0, min(35, lvl))
+                avg_j1, avg_j3 = (5.0, 4.0) if stars >= 1 else war_points.forge_level_to_avg_points(clamped)
+                secret["forge_level"] = clamped
+                secret["forge_avg_j1"] = avg_j1
+                secret["forge_avg_j3"] = avg_j3
+                secret["forge_tier_j1"] = int(round(avg_j1))
+                secret["forge_tier_j3"] = int(round(avg_j3))
+                secret["max_forge"] = 1 if (has_max or lvl >= 35) else 0
+            elif has_max:
+                secret["max_forge"] = 1
+        elif cat in ("animals", "mounts", "skills"):
+            max_key = {"animals": "max_oeufs", "mounts": "max_montures", "skills": "max_competences"}[cat]
+            if has_max or (lvl is not None and lvl >= 100):
+                secret[max_key] = 1
+            elif lvl is not None:
+                secret[max_key] = 0
+
+        # 2. Strip gold values ('4m gold', '1,69 M gold') so they never pollute marteaux
+        rest = _TXT_GOLD_RE.sub(" ", rest)
+
+        # 3. Extract & strip fusions on animals / mounts lines
+        if cat in ("animals", "mounts"):
+            fus_key = "fusion_pets" if cat == "animals" else "fusion_montures"
+            fm = _TXT_FUSION_AFTER_RE.search(rest) or _TXT_FUSION_BEFORE_RE.search(rest)
+            if fm:
+                famt = _parse_text_amount(fm.group(1))
+                if famt is not None:
+                    visible[fus_key] = famt
+                rest = rest[:fm.start()] + " " + rest[fm.end():]
+
+        # 4. Extract explicit resource amount (<num> <kw> or <kw> <num>), else fallback to remaining number
+        field = _TXT_CATEGORY_FIELD[cat]
+        short_k = cat == "fioles"
+        kw_pat = _TXT_CATEGORY_EXPLICIT_KW[cat]
+        em = re.search(rf"({_TXT_NUM_PAT})\s*{kw_pat}\b", rest, re.IGNORECASE) or re.search(
+            rf"\b{kw_pat}\s*[:=]?\s*({_TXT_NUM_PAT})", rest, re.IGNORECASE
+        )
+        if em:
+            amt = _parse_text_amount(em.group(1), short_k_decimal=short_k)
+            if amt is not None:
+                visible[field] = amt
+        else:
+            nm = _TXT_NUM_RE.search(rest)
+            if nm:
+                amt = _parse_text_amount(nm.group(0), short_k_decimal=short_k)
+                if amt is not None:
+                    visible[field] = amt
+
+    return {"visible": visible, "secret": secret}

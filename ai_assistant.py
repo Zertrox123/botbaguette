@@ -4,28 +4,25 @@ from datetime import datetime
 import glob
 import json
 import os
-from typing import Deque, Dict, Optional
+import re
+from typing import Any, Deque, Dict, Optional
 import aiohttp
 
 import db
 import war_points
 
 AI_CHANNEL_ID = 1574928005959127173
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
-AI_MODEL = os.getenv("AI_MODEL", "qwen3:1.7b")
+AI_URL = os.getenv("AI_URL", "http://127.0.0.1:1234/api/v1/chat")
+AI_MODEL = os.getenv("AI_MODEL", "qwen/qwen3-vl-8b")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Mémoire courte des 6 derniers échanges (12 messages) du salon IA
 _CHAT_HISTORY: Deque[Dict[str, str]] = deque(maxlen=12)
-
-_CODE_KEYWORDS = (
-    "code", "bug", "fichier", "fonction", "script", "python", "ocr", "scan",
-    "calcul", "formule", "sql", "db", "command", "erreur", "impl", "modifier",
-)
+_THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
 
 
 def build_database_context(db_path: Optional[str] = None) -> str:
-    """Build a complete, compact snapshot of the entire SQLite database with precomputed summaries."""
+    """Build a complete snapshot of the entire SQLite database with precomputed summaries."""
     profiles = db.get_all_profiles(db_path=db_path)
     lines = ["=== RESUME CLAN (PRE-CALCULE) ==="]
     dated = [p for p in profiles if int(p.get("updated_at") or 0) > 0]
@@ -72,33 +69,88 @@ def build_database_context(db_path: Optional[str] = None) -> str:
     return "\n".join(lines)
 
 
-def build_code_context(prompt: str = "", max_chars: int = 1600) -> str:
-    """Include a compact file list always, and code excerpts when the question is about code/logic."""
+def build_code_context(max_chars: Optional[int] = None) -> str:
+    """Include the bot Python source code (excluding credential.py) as context."""
     files = [
         os.path.basename(p)
         for p in sorted(glob.glob(os.path.join(BASE_DIR, "*.py")))
         if os.path.basename(p) != "credential.py"
     ]
-    low = prompt.lower()
-    if not any(kw in low for kw in _CODE_KEYWORDS):
-        return "Fichiers du bot : " + ", ".join(files)
-
-    chunks = ["=== EXTRAITS CODE ==="]
+    chunks = ["=== CODE SOURCE DU BOT ==="]
     total = 0
     for name in files:
-        if name.replace(".py", "") in low or total < max_chars:
-            try:
-                with open(os.path.join(BASE_DIR, name), "r", encoding="utf-8") as f:
-                    src = f.read()
-            except OSError:
-                continue
-            snippet = src[:400]
-            entry = f"\n[{name}]\n{snippet}"
-            if total + len(entry) > max_chars:
-                break
-            chunks.append(entry)
-            total += len(entry)
+        try:
+            with open(os.path.join(BASE_DIR, name), "r", encoding="utf-8") as f:
+                src = f.read()
+        except OSError:
+            continue
+        entry = f"\n--- {name} ---\n{src}"
+        if max_chars is not None and total + len(entry) > max_chars:
+            rem = max_chars - total
+            if rem > 200:
+                chunks.append(entry[:rem] + "\n...[tronqué]")
+            break
+        chunks.append(entry)
+        total += len(entry)
     return "\n".join(chunks)
+
+
+def _extract_reply(data: Any) -> str:
+    """Extract assistant reply text from LM Studio /api/v1/chat (or OpenAI/Ollama fallback)."""
+    if not isinstance(data, dict):
+        return ""
+    output = data.get("output")
+    if isinstance(output, list):
+        msg_parts = [
+            str(item.get("content") or "")
+            for item in output
+            if isinstance(item, dict) and item.get("type") == "message"
+        ]
+        if not msg_parts:
+            msg_parts = [
+                str(item.get("content") or "")
+                for item in output
+                if isinstance(item, dict) and item.get("type") != "reasoning" and item.get("content")
+            ]
+        text = "\n".join(p for p in msg_parts if p).strip()
+        if text:
+            return _THINK_RE.sub("", text).strip()
+    if isinstance(data.get("message"), dict) and data["message"].get("content"):
+        return _THINK_RE.sub("", str(data["message"]["content"])).strip()
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        msg = choices[0].get("message") or {}
+        if isinstance(msg, dict) and msg.get("content"):
+            return _THINK_RE.sub("", str(msg["content"])).strip()
+    for key in ("response", "content", "text"):
+        if data.get(key):
+            return _THINK_RE.sub("", str(data[key])).strip()
+    return ""
+
+
+def _build_system_prompt(author_name: str, db_ctx: str, code_ctx: str) -> str:
+    return (
+        "Tu es l'assistant IA du bot Discord ForgeMaster War pour le jeu mobile Forge Master (clan Baguette6). "
+        f"La personne qui te parle actuellement s'appelle {author_name}.\n"
+        "Règles strictes :\n"
+        "- Tu AS accès en direct à toute la base de données dans DB PROFILS et à tout le code source du bot ci-dessous.\n"
+        "- Réponds en français, de façon naturelle, directe et précise (ne répète jamais le pseudo entre crochets).\n"
+        "- N'attribue JAMAIS les stats d'un joueur à un autre joueur.\n"
+        "- Si un joueur n'apparaît pas dans DB PROFILS, dis clairement qu'il n'a pas encore enregistré son profil (/profil ou /scan).\n"
+        "- N'invente jamais de chiffres absents de la DB.\n\n"
+        f"{db_ctx}\n\n{code_ctx}"
+    )
+
+
+def _format_input_with_history(author_name: str, prompt: str) -> str:
+    if not _CHAT_HISTORY:
+        return f"({author_name}) {prompt}"
+    hist = []
+    for msg in _CHAT_HISTORY:
+        role = "Utilisateur" if msg["role"] == "user" else "Assistant"
+        hist.append(f"{role}: {msg['content']}")
+    hist.append(f"Utilisateur: ({author_name}) {prompt}")
+    return "\n".join(hist)
 
 
 async def ask_local_ai(
@@ -106,51 +158,37 @@ async def ask_local_ai(
     author_name: str = "Utilisateur",
     db_path: Optional[str] = None,
 ) -> str:
-    """Query the local Ollama model with author identity, short chat memory, and live DB context."""
+    """Query the user-hosted LM Studio /api/v1/chat endpoint with full DB and code context."""
     db_ctx = build_database_context(db_path=db_path)
-    code_ctx = build_code_context(prompt)
+    full_code_ctx = build_code_context(max_chars=None)
+    user_input = _format_input_with_history(author_name, prompt)
 
-    system_prompt = (
-        "Tu es l'assistant IA du bot Discord ForgeMaster War pour le jeu mobile Forge Master (clan Baguette6). "
-        f"La personne qui te parle actuellement s'appelle {author_name}.\n"
-        "Règles strictes :\n"
-        "- Tu AS accès en direct à toute la base de données dans DB PROFILS ci-dessous (incluant la date de mise à jour `maj=...`). Utilise-la toujours pour répondre.\n"
-        "- Réponds en français, de façon naturelle, directe et précise (ne répète jamais le pseudo entre crochets).\n"
-        "- N'attribue JAMAIS les stats d'un joueur à un autre joueur.\n"
-        "- Si un joueur n'apparaît pas dans DB PROFILS, dis clairement qu'il n'a pas encore enregistré son profil (/profil ou /scan).\n"
-        "- N'invente jamais de chiffres absents de la DB.\n\n"
-        f"{db_ctx}\n{code_ctx}"
-    )
-
-    messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(list(_CHAT_HISTORY))
-    messages.append({"role": "user", "content": prompt})
-
-    payload = {
-        "model": AI_MODEL,
-        "stream": False,
-        "think": False,
-        "keep_alive": "30m",
-        "options": {"num_predict": 350, "temperature": 0.25},
-        "messages": messages,
-    }
-
-    timeout = aiohttp.ClientTimeout(total=240)
+    timeout = aiohttp.ClientTimeout(total=180)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(OLLAMA_URL, json=payload) as resp:
-                if resp.status != 200:
-                    txt = await resp.text()
-                    return f"⚠️ Erreur `{AI_MODEL}` (HTTP {resp.status}) : `{txt[:200]}`"
-                data = await resp.json()
-                reply = (data.get("message", {}).get("content") or "").strip() or "*(Réponse vide du modèle)*"
-                _CHAT_HISTORY.append({"role": "user", "content": f"({author_name}) {prompt}"})
-                _CHAT_HISTORY.append({"role": "assistant", "content": reply})
-                return reply
+            # Try full DB + full code first; if server rejects context size (HTTP 400), retry with trimmed code.
+            for code_ctx in (full_code_ctx, build_code_context(max_chars=8000)):
+                payload = {
+                    "model": AI_MODEL,
+                    "system_prompt": _build_system_prompt(author_name, db_ctx, code_ctx),
+                    "input": user_input,
+                }
+                async with session.post(AI_URL, json=payload) as resp:
+                    if resp.status == 400 and code_ctx is full_code_ctx:
+                        continue
+                    if resp.status != 200:
+                        txt = await resp.text()
+                        return f"⚠️ Erreur `{AI_MODEL}` (HTTP {resp.status}) : `{txt[:200]}`"
+                    data = await resp.json()
+                    reply = _extract_reply(data) or "*(Réponse vide du modèle)*"
+                    _CHAT_HISTORY.append({"role": "user", "content": f"({author_name}) {prompt}"})
+                    _CHAT_HISTORY.append({"role": "assistant", "content": reply})
+                    return reply
     except asyncio.TimeoutError:
-        return f"⏳ Le modèle `{AI_MODEL}` a mis trop de temps à répondre (CPU occupé). Réessaie avec une question plus courte."
+        return f"⏳ Le modèle `{AI_MODEL}` a mis trop de temps à répondre. Réessaie."
     except Exception as exc:
         return (
-            f"⚠️ Modèle local `{AI_MODEL}` injoignable sur `{OLLAMA_URL}`.\n"
+            f"⚠️ Modèle IA `{AI_MODEL}` injoignable sur `{AI_URL}`.\n"
             f"Détail : `{type(exc).__name__}`"
         )
+    return "*(Réponse vide du modèle)*"

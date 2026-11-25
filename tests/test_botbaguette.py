@@ -355,6 +355,24 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
         self.assertIn("**Filtre :** `Tout`", panel_embed_j2.description)
         self.assertEqual(db.get_admin_state(999, db_path=self.db_path)["resource_filter"], "all")
 
+        # Effective Déduits is 0 in Ascension mode when player has 0 ascension points on that day
+        db.record_war_deduction(42, 2, 5000, now=10200, db_path=self.db_path)
+        db.update_admin_state(999, {"selected_day": 2, "ascension_only": 1, "resource_filter": "all"}, db_path=self.db_path)
+        panel_embed_asc = admin_ui.build_admin_panel_embed(999, "Baguette6", emoji_map={}, db_path=self.db_path)
+        self.assertNotIn("-5 000", panel_embed_asc.description)
+
+        # LM Studio /api/v1/chat response parser
+        import ai_assistant
+        self.assertEqual(
+            ai_assistant._extract_reply({
+                "output": [
+                    {"type": "reasoning", "content": "hidden thoughts"},
+                    {"type": "message", "content": "Bonjour clan !"},
+                ]
+            }),
+            "Bonjour clan !",
+        )
+
         # Members page embed + /membre lookup by short_id
         found = db.get_profile_by_identifier(str(sid), db_path=self.db_path)
         self.assertEqual(found["user_id"], 42)

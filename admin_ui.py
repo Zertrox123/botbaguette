@@ -59,10 +59,10 @@ def build_admin_panel_embed(
     filter_str = war_points.RESOURCE_FILTER_LABELS.get(res_filter, res_filter)
     mode_str = "✨ ASCENSION (Ressources Max uniquement)" if ascension_only else "⚔️ NORMAL (Ressources Max exclues)"
 
-    # Compact 50-char table so it never wraps inside Discord PC embeds
+    # Compact 48-char table so it never wraps inside Discord PC embeds
     table_lines = [
-        f"{'Jour':<11} | {'Clan Pts':>9} | {'Snipers':>13} | {'Déduits':>7}",
-        "-" * 49,
+        f"{'Jour':<11} | {'Clan Pts':>8} | {'Snipers':>12} | {'Déduits':>8}",
+        "-" * 48,
     ]
     days_to_show = [1, 2, 3, 4, 5] if selected_day == 0 else [selected_day]
     for d in days_to_show:
@@ -74,10 +74,12 @@ def build_admin_panel_embed(
         for p in included_profiles:
             uid = int(p["user_id"])
             ded = deductions.get(uid, 0)
-            ded_sum += ded
-            pts, _ = war_points.compute_day_potential(
-                p, d, resource_filter=res_filter, ascension_only=ascension_only, deducted_pts=ded
+            raw_pts, _ = war_points.compute_day_potential(
+                p, d, resource_filter=res_filter, ascension_only=ascension_only, deducted_pts=0
             )
+            eff_ded = min(raw_pts, ded) if raw_pts > 0 else 0
+            pts = raw_pts - eff_ded
+            ded_sum += eff_ded
             clan_pts += pts
             if uid in snipers:
                 snipe_pts += pts
@@ -85,7 +87,7 @@ def build_admin_panel_embed(
         snipe_col = f"{db.format_amount(snipe_pts)} ({len(snipers)})"
         ded_col = f"-{db.format_amount(ded_sum)}" if ded_sum > 0 else "0"
         table_lines.append(
-            f"{d_label:<11} | {db.format_amount(clan_pts):>9} | {snipe_col:>13} | {ded_col:>7}"
+            f"{d_label:<11} | {db.format_amount(clan_pts):>8} | {snipe_col:>12} | {ded_col:>8}"
         )
 
     # Global stock aggregation
@@ -108,10 +110,12 @@ def build_admin_panel_embed(
     for p in included_profiles:
         uid = int(p["user_id"])
         ded = detail_deds.get(uid, 0)
-        pts, _ = war_points.compute_day_potential(
-            p, detail_day, resource_filter=res_filter, ascension_only=ascension_only, deducted_pts=ded
+        raw_pts, _ = war_points.compute_day_potential(
+            p, detail_day, resource_filter=res_filter, ascension_only=ascension_only, deducted_pts=0
         )
-        ranked.append((pts, p, uid in detail_snipers, ded))
+        eff_ded = min(raw_pts, ded) if raw_pts > 0 else 0
+        pts = raw_pts - eff_ded
+        ranked.append((pts, p, uid in detail_snipers, eff_ded))
     ranked.sort(key=lambda x: (-x[0], (x[1].get("pseudo") or "").lower()))
 
     top_lines = []

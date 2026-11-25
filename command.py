@@ -41,6 +41,8 @@ AUTO_SCAN_CHANNEL_ID = 1522979872040030259
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
 @app_commands.describe(membre="Afficher le profil d'un autre membre du clan (optionnel)")
 async def profil(interaction: discord.Interaction, membre: Optional[discord.User] = None):
+    if not await admin_ui.check_admin_access(interaction):
+        return
     target = membre or interaction.user
     can_edit = target.id == interaction.user.id
     profile = db.get_or_create_profile(target.id, target.display_name)

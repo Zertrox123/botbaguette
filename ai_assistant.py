@@ -11,7 +11,7 @@ import war_points
 
 AI_CHANNEL_ID = 1574928005959127173
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
-AI_MODEL = os.getenv("AI_MODEL", "qwen2.5:1.5b")
+AI_MODEL = os.getenv("AI_MODEL", "qwen2.5:3b")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Mémoire courte des 6 derniers échanges (12 messages) du salon IA
@@ -90,29 +90,28 @@ async def ask_local_ai(
 
     system_prompt = (
         "Tu es l'assistant IA du bot Discord ForgeMaster War pour le jeu mobile Forge Master (clan Baguette6). "
+        f"La personne qui te parle actuellement s'appelle {author_name}.\n"
         "Règles strictes :\n"
-        "- Réponds en français, court, direct et précis.\n"
-        "- Tu connais le pseudo de la personne qui te parle (indiqué entre crochets [Pseudo]).\n"
+        "- Réponds en français, de façon naturelle, directe et précise (ne répète jamais le pseudo entre crochets).\n"
         "- N'attribue JAMAIS les stats d'un joueur à un autre joueur.\n"
         "- Si un joueur n'apparaît pas dans DB PROFILS, dis clairement qu'il n'a pas encore enregistré son profil (/profil ou /scan).\n"
-        "- N'invente jamais de jeu (c'est Forge Master, pas Minecraft) ni de chiffres absents de la DB.\n\n"
+        "- N'invente jamais de chiffres absents de la DB.\n\n"
         f"{db_ctx}\n{code_ctx}"
     )
 
-    user_msg = f"[{author_name}] : {prompt}"
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(list(_CHAT_HISTORY))
-    messages.append({"role": "user", "content": user_msg})
+    messages.append({"role": "user", "content": prompt})
 
     payload = {
         "model": AI_MODEL,
         "stream": False,
         "keep_alive": "30m",
-        "options": {"num_predict": 300, "temperature": 0.15},
+        "options": {"num_predict": 350, "temperature": 0.25},
         "messages": messages,
     }
 
-    timeout = aiohttp.ClientTimeout(total=180)
+    timeout = aiohttp.ClientTimeout(total=240)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(OLLAMA_URL, json=payload) as resp:
@@ -121,7 +120,7 @@ async def ask_local_ai(
                     return f"⚠️ Erreur `{AI_MODEL}` (HTTP {resp.status}) : `{txt[:200]}`"
                 data = await resp.json()
                 reply = (data.get("message", {}).get("content") or "").strip() or "*(Réponse vide du modèle)*"
-                _CHAT_HISTORY.append({"role": "user", "content": user_msg})
+                _CHAT_HISTORY.append({"role": "user", "content": f"({author_name}) {prompt}"})
                 _CHAT_HISTORY.append({"role": "assistant", "content": reply})
                 return reply
     except asyncio.TimeoutError:

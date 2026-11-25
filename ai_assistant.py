@@ -10,7 +10,7 @@ import war_points
 
 AI_CHANNEL_ID = 1574928005959127173
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
-AI_MODEL = os.getenv("AI_MODEL", "gemma2:2b")
+AI_MODEL = os.getenv("AI_MODEL", "qwen2.5:1.5b")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 _CODE_KEYWORDS = (

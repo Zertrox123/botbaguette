@@ -349,7 +349,6 @@ class AdminPanelView(discord.ui.View):
             f"📸 **Scan Guerre — Jour {target_day} ({war_points.WAR_DAY_NAMES[target_day]})**\n"
             "Envoie maintenant tes captures du classement de guerre dans ce salon (**jusqu'à 20 images** en un ou plusieurs messages, 90s max).\n"
             "Tape `ok` quand tu as fini (ou attends la fin du délai).",
-            ephemeral=True,
         )
 
         bot = interaction.client
@@ -378,7 +377,7 @@ class AdminPanelView(discord.ui.View):
                     break
 
         if not collected:
-            return await interaction.followup.send("❌ Aucune image reçue pour le scan de guerre.", ephemeral=True)
+            return await interaction.followup.send("❌ Aucune image reçue pour le scan de guerre.")
 
         profiles = db.get_all_profiles(db_path=self.db_path)
         applied_lines = []
@@ -417,7 +416,7 @@ class AdminPanelView(discord.ui.View):
             await interaction.message.edit(embed=embed, view=self)
         except Exception:
             pass
-        await interaction.followup.send("\n".join(report), ephemeral=True)
+        await interaction.followup.send("\n".join(report))
 
     @discord.ui.button(label="Membres", emoji="👥", style=discord.ButtonStyle.secondary, row=0)
     async def members_btn(self, interaction: discord.Interaction, button: discord.ui.Button):

@@ -299,7 +299,7 @@ async def membre(interaction: discord.Interaction, identifiant: str):
     sdays = db.get_user_snipe_days(uid)
     embed = admin_ui.build_member_admin_embed(profile, sdays)
     view = admin_ui.MemberEditView(uid)
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    await interaction.response.send_message(embed=embed, view=view)
 
 
 @bot.event
@@ -328,9 +328,11 @@ async def on_message(message: discord.Message):
         return
 
     if message.channel.id == ai_assistant.AI_CHANNEL_ID and message.content.strip():
+        # Replace raw <@id> mentions with readable @DisplayName + keep ID hint
+        clean_prompt = message.clean_content.strip()
         async with message.channel.typing():
             reply = await ai_assistant.ask_local_ai(
-                message.content.strip(),
+                clean_prompt,
                 author_name=message.author.display_name,
             )
         # Chunk response cleanly under Discord's 2000-char limit

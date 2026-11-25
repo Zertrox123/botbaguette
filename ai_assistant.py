@@ -25,9 +25,24 @@ _CODE_KEYWORDS = (
 
 
 def build_database_context(db_path: Optional[str] = None) -> str:
-    """Build a complete, compact snapshot of the entire SQLite database for the local model."""
+    """Build a complete, compact snapshot of the entire SQLite database with precomputed summaries."""
     profiles = db.get_all_profiles(db_path=db_path)
-    lines = ["=== DB PROFILS (DONNEES LIVE) ==="]
+    lines = ["=== RESUME CLAN (PRE-CALCULE) ==="]
+    dated = [p for p in profiles if int(p.get("updated_at") or 0) > 0]
+    if dated:
+        oldest = min(dated, key=lambda p: int(p["updated_at"]))
+        newest = max(dated, key=lambda p: int(p["updated_at"]))
+        o_dt = datetime.fromtimestamp(int(oldest["updated_at"]), tz=war_points.PARIS_TZ).strftime("%d/%m/%Y %H:%M")
+        n_dt = datetime.fromtimestamp(int(newest["updated_at"]), tz=war_points.PARIS_TZ).strftime("%d/%m/%Y %H:%M")
+        lines.append(f"Plus ancienne MAJ: {oldest.get('pseudo')} ({o_dt}, {db.format_relative_age(int(oldest['updated_at']))})")
+        lines.append(f"Plus recente MAJ: {newest.get('pseudo')} ({n_dt}, {db.format_relative_age(int(newest['updated_at']))})")
+    totals = [
+        sum(war_points.compute_day_potential(p, d)[0] for p in profiles)
+        for d in range(1, 6)
+    ]
+    lines.append(f"Total points potentiels clan J1..J5: J1={totals[0]}, J2={totals[1]}, J3={totals[2]}, J4={totals[3]}, J5={totals[4]}")
+
+    lines.append("\n=== DB PROFILS (DONNEES LIVE) ===")
     for p in profiles:
         uid = int(p["user_id"])
         sdays = db.get_user_snipe_days(uid, db_path=db_path)
@@ -39,13 +54,13 @@ def build_database_context(db_path: Optional[str] = None) -> str:
         else:
             upd_str = "jamais"
         lines.append(
-            f"id={p.get('short_id')} pseudo={p.get('pseudo')} puissance={p.get('puissance') or '?'} "
+            f"id={p.get('short_id')} discord_id={uid} pseudo={p.get('pseudo')} puissance={p.get('puissance') or '?'} "
             f"maj={upd_str} calc={p.get('include_in_calc')} Forge={p.get('forge_level')} "
             f"Marteaux={p.get('marteaux')} Comp={p.get('competences')} ClesM={p.get('cles_monture')} "
             f"Potions={p.get('potions')} FiolesV={p.get('fioles_vertes')} Oeufs={p.get('oeufs')} "
             f"FusM={p.get('fusion_montures')} FusP={p.get('fusion_pets')} "
             f"Max(F/C/M/O)=({p.get('max_forge')},{p.get('max_competences')},{p.get('max_montures')},{p.get('max_oeufs')}) "
-            f"Snipe={sdays} Pts_J1_a_J5={pts}"
+            f"Snipe={sdays} J1={pts[0]} J2={pts[1]} J3={pts[2]} J4={pts[3]} J5={pts[4]}"
         )
     ded_lines = []
     for d in range(1, 6):

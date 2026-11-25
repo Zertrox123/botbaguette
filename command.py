@@ -286,9 +286,8 @@ async def admin_panel(interaction: discord.Interaction):
         return
     guild_id = interaction.guild.id if interaction.guild else 0
     clan_name = interaction.guild.name if interaction.guild else "Baguette6"
-    embed = admin_ui.build_admin_panel_embed(guild_id, clan_name, emoji_map)
     view = admin_ui.AdminPanelView(guild_id, clan_name, emoji_map)
-    await interaction.response.send_message(embed=embed, view=view)
+    await interaction.response.send_message(embed=view.current_embed(), view=view)
 
 
 @bot.tree.command(name="membre", description="Gérer un membre (snipe, ressources Max/Ascension, calculateur)")

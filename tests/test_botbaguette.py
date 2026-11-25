@@ -373,6 +373,15 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
         panel_embed_asc = admin_ui.build_admin_panel_embed(999, "Baguette6", emoji_map={}, db_path=self.db_path)
         self.assertNotIn("-5 000", panel_embed_asc.description)
 
+        # New /admin Ascensions (2x2 + filtered, no fire icon) & Œufs/Fusions embeds
+        asc_grid = admin_ui.build_ascensions_embed("Baguette6", {}, res_filter="all", db_path=self.db_path)
+        self.assertEqual(len(asc_grid.fields), 4)
+        self.assertNotIn("🔥", asc_grid.description)
+        asc_comp = admin_ui.build_ascensions_embed("Baguette6", {}, res_filter="competences", db_path=self.db_path)
+        self.assertIn("Plolipop", asc_comp.fields[0].value)
+        eggs_emb = admin_ui.build_eggs_fusions_embed("Baguette6", {}, db_path=self.db_path)
+        self.assertEqual(len(eggs_emb.fields), 3)
+
         # LM Studio /api/v1/chat response parser
         import ai_assistant
         self.assertEqual(

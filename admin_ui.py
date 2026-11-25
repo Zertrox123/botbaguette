@@ -10,6 +10,176 @@ import scanner
 import war_points
 
 ADMIN_USER_IDS = {542655055803842572, 164319847021412352}
+MAX_SANE_EGGS = 10_000_000
+
+ASC_SPECS = [
+    ("forge", "max_forge", "marteaux", "fm_hammer", "Forge"),
+    ("competences", "max_competences", "competences", "fm_ticket", "Compétences"),
+    ("montures", "max_montures", "cles_monture", "fm_mountkey", "Montures"),
+    ("oeufs", "max_oeufs", "oeufs", "fm_egg", "Œufs"),
+]
+
+
+def build_ascensions_embed(
+    clan_name: str,
+    emoji_map: Dict[str, discord.Emoji],
+    res_filter: str = "all",
+    db_path: Optional[str] = None,
+) -> discord.Embed:
+    e = lambda k: profile_ui.emoji_str(emoji_map, k)
+    profiles = [p for p in db.get_all_profiles(db_path=db_path) if int(p.get("include_in_calc", 1)) != 0]
+    now_str = datetime.now(war_points.PARIS_TZ).strftime("%d-%m-%y %H:%M")
+
+    if res_filter != "all":
+        spec = next((s for s in ASC_SPECS if s[0] == res_filter), ASC_SPECS[0])
+        _key, max_col, amt_col, icon, label = spec
+        max_list = []
+        non_max_big = []
+        for p in profiles:
+            amt = int(p.get(amt_col) or 0)
+            if amt_col == "oeufs" and amt > MAX_SANE_EGGS:
+                continue
+            pseudo = p.get("pseudo") or f"Joueur {p['user_id']}"
+            if int(p.get(max_col) or 0) == 1:
+                max_list.append((amt, pseudo))
+            elif amt >= 50_000:
+                non_max_big.append((amt, pseudo))
+        max_list.sort(key=lambda x: (-x[0], x[1].lower()))
+        non_max_big.sort(key=lambda x: (-x[0], x[1].lower()))
+        total_stock = sum(amt for amt, _ in max_list)
+
+        lines = [f"`{idx:>2}.` **{pseudo}** — `{db.format_amount(amt)}`" for idx, (amt, pseudo) in enumerate(max_list, start=1)]
+        if not lines:
+            lines.append("*Aucun joueur Max sur cette ressource.*")
+
+        embed = discord.Embed(
+            title=f"{e(icon)} Ascensions — {label} ({clan_name})",
+            color=discord.Color.from_rgb(155, 89, 182),
+            description=(
+                f"**Joueurs Max :** `{len(max_list)}`  •  "
+                f"**Stock cumulé (Max) :** `{db.format_amount(total_stock)}`"
+            ),
+        )
+        embed.add_field(
+            name=f"🏆 Classement Joueurs Max ({len(max_list)})",
+            value="\n".join(lines)[:1024],
+            inline=False,
+        )
+        if non_max_big:
+            embed.add_field(
+                name="📦 Gros stocks non-Max (≥ 50k)",
+                value="\n".join(f"• **{ps}** — `{db.format_amount(am)}`" for am, ps in non_max_big[:6])[:1024],
+                inline=False,
+            )
+        embed.set_footer(text=f"Panel Admin • {now_str} • /membre [id] pour éditer")
+        return embed
+
+    # 2x2 overview grid across all 4 Ascension resources
+    total_max = 0
+    unique_users = set()
+    cards = []
+    for _key, max_col, amt_col, icon, label in ASC_SPECS:
+        max_rows = []
+        for p in profiles:
+            if int(p.get(max_col) or 0) == 1:
+                amt = int(p.get(amt_col) or 0)
+                if amt_col == "oeufs" and amt > MAX_SANE_EGGS:
+                    amt = 0
+                unique_users.add(int(p["user_id"]))
+                max_rows.append((amt, p.get("pseudo") or f"Joueur {p['user_id']}"))
+        max_rows.sort(key=lambda x: (-x[0], x[1].lower()))
+        total_max += len(max_rows)
+
+        if max_rows:
+            top_lines = [f"`{idx}.` **{ps}** — `{db.format_amount(am)}`" for idx, (am, ps) in enumerate(max_rows[:4], start=1)]
+            if len(max_rows) > 4:
+                top_lines.append(f"*+{len(max_rows) - 4} autre(s) (filtre ci-dessous)*")
+            body = "\n".join(top_lines)
+        else:
+            body = "*Aucun joueur Max*"
+        cards.append((f"{e(icon)} {label} ({len(max_rows)})", body))
+
+    embed = discord.Embed(
+        title=f"✨ Dashboard Ascensions — {clan_name}",
+        color=discord.Color.from_rgb(155, 89, 182),
+        description=(
+            f"**Total ressources Max :** `{total_max}` ({len(unique_users)} joueur(s))  •  "
+            f"**Membres actifs :** `{len(profiles)}`"
+        ),
+    )
+    for title, body in cards:
+        embed.add_field(name=title, value=body, inline=True)
+    embed.set_footer(text=f"Panel Admin • {now_str} • Utilise le filtre pour voir tout un classement")
+    return embed
+
+
+def build_eggs_fusions_embed(
+    clan_name: str,
+    emoji_map: Dict[str, discord.Emoji],
+    db_path: Optional[str] = None,
+) -> discord.Embed:
+    e = lambda k: profile_ui.emoji_str(emoji_map, k)
+    profiles = [p for p in db.get_all_profiles(db_path=db_path) if int(p.get("include_in_calc", 1)) != 0]
+    now_str = datetime.now(war_points.PARIS_TZ).strftime("%d-%m-%y %H:%M")
+
+    can_open = []
+    should_hold = []
+    merge_only = []
+    tot_eggs = 0
+    tot_fus = 0
+    outliers = []
+
+    for p in profiles:
+        eggs = int(p.get("oeufs") or 0)
+        fus = int(p.get("fusion_pets") or 0)
+        pseudo = p.get("pseudo") or f"Joueur {p['user_id']}"
+        is_max = bool(int(p.get("max_oeufs") or 0))
+        if eggs > MAX_SANE_EGGS:
+            outliers.append(pseudo)
+            eggs = 0
+        tot_eggs += eggs
+        tot_fus += fus
+        if eggs >= 20_000 and fus < 300:
+            can_open.append((eggs, fus, pseudo, is_max))
+        elif eggs >= 20_000 and fus >= 300:
+            should_hold.append((eggs, fus, pseudo, is_max))
+        elif fus >= 200:
+            merge_only.append((fus, eggs, pseudo, is_max))
+
+    can_open.sort(key=lambda x: (-x[0], x[2].lower()))
+    should_hold.sort(key=lambda x: (-x[0], -x[1], x[2].lower()))
+    merge_only.sort(key=lambda x: (-x[0], -x[1], x[2].lower()))
+
+    def fmt_row(eggs: int, fus: int, pseudo: str, is_max: bool) -> str:
+        mtag = " `MAX`" if is_max else ""
+        return f"• **{pseudo}**{mtag} — {e('fm_egg')} `{db.format_amount(eggs)}`  •  {e('fm_pet_merge')} `{db.format_amount(fus)}` fusions"
+
+    embed = discord.Embed(
+        title=f"{e('fm_egg')} Suivi Œufs & Fusions Pets — {clan_name}",
+        color=discord.Color.from_rgb(46, 204, 113),
+        description=(
+            f"{e('fm_egg')} **Total Coquilles :** `{db.format_amount(tot_eggs)}`  •  "
+            f"{e('fm_pet_merge')} **Total Fusions Pets :** `{db.format_amount(tot_fus)}`"
+            + (f"\n⚠️ *Scan œufs à corriger : {', '.join(outliers)}*" if outliers else "")
+        ),
+    )
+    embed.add_field(
+        name=f"🟢 Peuvent ouvrir (≥ 20k coquilles, < 300 fusions) — {len(can_open)}",
+        value="\n".join(fmt_row(eg, fu, ps, mx) for eg, fu, ps, mx in can_open[:8]) or "*Aucun joueur*",
+        inline=False,
+    )
+    embed.add_field(
+        name=f"🟡 À garder / Attendre (≥ 20k coquilles + ≥ 300 fusions) — {len(should_hold)}",
+        value="\n".join(fmt_row(eg, fu, ps, mx) for eg, fu, ps, mx in should_hold[:8]) or "*Aucun joueur*",
+        inline=False,
+    )
+    embed.add_field(
+        name=f"🧬 Fusions prêtes sans gros stock d'œufs (≥ 200 fusions) — {len(merge_only)}",
+        value="\n".join(fmt_row(eg, fu, ps, mx) for fu, eg, ps, mx in merge_only[:10]) or "*Aucun joueur*",
+        inline=False,
+    )
+    embed.set_footer(text=f"Panel Admin • {now_str} • /membre [id] pour éditer")
+    return embed
 
 
 async def check_admin_access(interaction: discord.Interaction) -> bool:
@@ -256,9 +426,8 @@ class MembersPaginationView(discord.ui.View):
 
     @discord.ui.button(label="Retour Panel", emoji="🛡️", style=discord.ButtonStyle.primary)
     async def back_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        panel_view = AdminPanelView(self.guild_id, self.clan_name, self.emoji_map, db_path=self.db_path)
-        embed = build_admin_panel_embed(self.guild_id, self.clan_name, self.emoji_map, db_path=self.db_path)
-        await interaction.response.edit_message(embed=embed, view=panel_view)
+        panel_view = AdminPanelView(self.guild_id, self.clan_name, self.emoji_map, active_tab="ascensions", db_path=self.db_path)
+        await interaction.response.edit_message(embed=panel_view.current_embed(), view=panel_view)
 
 
 class FilterView(discord.ui.View):
@@ -343,9 +512,8 @@ class FilterView(discord.ui.View):
 
     @discord.ui.button(label="Valider & Retour Panel", emoji="✅", style=discord.ButtonStyle.success, row=2)
     async def done(self, interaction: discord.Interaction, button: discord.ui.Button):
-        panel_view = AdminPanelView(self.guild_id, self.clan_name, self.emoji_map, db_path=self.db_path)
-        embed = build_admin_panel_embed(self.guild_id, self.clan_name, self.emoji_map, db_path=self.db_path)
-        await interaction.response.edit_message(embed=embed, view=panel_view)
+        panel_view = AdminPanelView(self.guild_id, self.clan_name, self.emoji_map, active_tab="war", db_path=self.db_path)
+        await interaction.response.edit_message(embed=panel_view.current_embed(), view=panel_view)
 
 
 class AdminPanelView(discord.ui.View):
@@ -357,20 +525,135 @@ class AdminPanelView(discord.ui.View):
         guild_id: int,
         clan_name: str,
         emoji_map: Dict[str, discord.Emoji],
+        active_tab: str = "ascensions",
+        asc_filter: str = "all",
         db_path: Optional[str] = None,
     ):
         super().__init__(timeout=600)
         self.guild_id = guild_id
         self.clan_name = clan_name
         self.emoji_map = emoji_map
+        self.active_tab = active_tab  # ascensions | eggs | war
+        self.asc_filter = asc_filter  # all | forge | competences | montures | oeufs
         self.db_path = db_path
-        state = db.get_admin_state(guild_id, db_path=db_path)
-        asc_on = bool(int(state.get("ascension_only") or 0))
-        self.ascension_btn.style = discord.ButtonStyle.success if asc_on else discord.ButtonStyle.secondary
-        self.ascension_btn.label = "Ascension : ON" if asc_on else "Ascension"
+        self._rebuild_items()
 
-    @discord.ui.button(label="Scan Guerre", emoji="📸", style=discord.ButtonStyle.primary, row=0)
-    async def scan_war_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    def current_embed(self) -> discord.Embed:
+        if self.active_tab == "eggs":
+            return build_eggs_fusions_embed(self.clan_name, self.emoji_map, db_path=self.db_path)
+        if self.active_tab == "war":
+            return build_admin_panel_embed(self.guild_id, self.clan_name, self.emoji_map, db_path=self.db_path)
+        return build_ascensions_embed(self.clan_name, self.emoji_map, res_filter=self.asc_filter, db_path=self.db_path)
+
+    def _rebuild_items(self) -> None:
+        self.clear_items()
+
+        # Row 0: main navigation tabs + Members
+        b_asc = discord.ui.Button(
+            label="Ascensions",
+            emoji="✨",
+            style=discord.ButtonStyle.primary if self.active_tab == "ascensions" else discord.ButtonStyle.secondary,
+            row=0,
+        )
+        b_asc.callback = self._go_ascensions
+        self.add_item(b_asc)
+
+        b_eggs = discord.ui.Button(
+            label="Œufs & Fusions",
+            emoji="🥚",
+            style=discord.ButtonStyle.success if self.active_tab == "eggs" else discord.ButtonStyle.secondary,
+            row=0,
+        )
+        b_eggs.callback = self._go_eggs
+        self.add_item(b_eggs)
+
+        b_war = discord.ui.Button(
+            label="Points & Scan",
+            emoji="⚔️",
+            style=discord.ButtonStyle.primary if self.active_tab == "war" else discord.ButtonStyle.secondary,
+            row=0,
+        )
+        b_war.callback = self._go_war
+        self.add_item(b_war)
+
+        b_mem = discord.ui.Button(
+            label="Membres",
+            emoji="👥",
+            style=discord.ButtonStyle.secondary,
+            row=0,
+        )
+        b_mem.callback = self._members_cb
+        self.add_item(b_mem)
+
+        # Row 1: contextual controls for the active tab
+        if self.active_tab == "ascensions":
+            asc_select = discord.ui.Select(
+                placeholder="Filtrer les Ascensions par ressource...",
+                row=1,
+                options=[
+                    discord.SelectOption(label="✨ Toutes les Ascensions (Vue 2×2)", value="all", default=(self.asc_filter == "all")),
+                    discord.SelectOption(label="🔨 Forge (Marteaux)", value="forge", default=(self.asc_filter == "forge")),
+                    discord.SelectOption(label="🎟️ Compétences", value="competences", default=(self.asc_filter == "competences")),
+                    discord.SelectOption(label="🗝️ Montures (Clés)", value="montures", default=(self.asc_filter == "montures")),
+                    discord.SelectOption(label="🥚 Œufs (Coquilles)", value="oeufs", default=(self.asc_filter == "oeufs")),
+                ],
+            )
+            asc_select.callback = self._on_asc_filter
+            self.add_item(asc_select)
+        elif self.active_tab == "eggs":
+            b_ref = discord.ui.Button(label="Actualiser", emoji="🔄", style=discord.ButtonStyle.secondary, row=1)
+            b_ref.callback = self._refresh_cb
+            self.add_item(b_ref)
+        elif self.active_tab == "war":
+            state = db.get_admin_state(self.guild_id, db_path=self.db_path)
+            asc_on = bool(int(state.get("ascension_only") or 0))
+
+            b_scan = discord.ui.Button(label="Scan Guerre", emoji="📸", style=discord.ButtonStyle.primary, row=1)
+            b_scan.callback = self._scan_war_cb
+            self.add_item(b_scan)
+
+            b_filt = discord.ui.Button(label="Filtre", emoji="🔍", style=discord.ButtonStyle.secondary, row=1)
+            b_filt.callback = self._filter_cb
+            self.add_item(b_filt)
+
+            b_ascmode = discord.ui.Button(
+                label="Ascension : ON" if asc_on else "Ascension",
+                emoji="✨",
+                style=discord.ButtonStyle.success if asc_on else discord.ButtonStyle.secondary,
+                row=1,
+            )
+            b_ascmode.callback = self._ascension_mode_cb
+            self.add_item(b_ascmode)
+
+            b_reset = discord.ui.Button(label="Reset Déductions", emoji="🔄", style=discord.ButtonStyle.danger, row=1)
+            b_reset.callback = self._reset_ded_cb
+            self.add_item(b_reset)
+
+    async def _go_ascensions(self, interaction: discord.Interaction):
+        self.active_tab = "ascensions"
+        self._rebuild_items()
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
+    async def _go_eggs(self, interaction: discord.Interaction):
+        self.active_tab = "eggs"
+        self._rebuild_items()
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
+    async def _go_war(self, interaction: discord.Interaction):
+        self.active_tab = "war"
+        self._rebuild_items()
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
+    async def _on_asc_filter(self, interaction: discord.Interaction):
+        self.asc_filter = interaction.data["values"][0]
+        self.active_tab = "ascensions"
+        self._rebuild_items()
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
+    async def _refresh_cb(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
+    async def _scan_war_cb(self, interaction: discord.Interaction):
         state = db.get_admin_state(self.guild_id, db_path=self.db_path)
         target_day = _get_active_day_for_details(int(state.get("selected_day") or 0))
         await interaction.response.send_message(
@@ -445,43 +728,35 @@ class AdminPanelView(discord.ui.View):
         if not applied_daily and not applied_weekly:
             report.append("\n❌ Aucun joueur du clan reconnu sur ces captures.")
 
-        # Refresh original panel message
         try:
-            embed = build_admin_panel_embed(self.guild_id, self.clan_name, self.emoji_map, db_path=self.db_path)
-            await interaction.message.edit(embed=embed, view=self)
+            await interaction.message.edit(embed=self.current_embed(), view=self)
         except Exception:
             pass
         await interaction.followup.send("\n".join(report))
 
-    @discord.ui.button(label="Membres", emoji="👥", style=discord.ButtonStyle.secondary, row=0)
-    async def members_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _members_cb(self, interaction: discord.Interaction):
         state = db.get_admin_state(self.guild_id, db_path=self.db_path)
         day = _get_active_day_for_details(int(state.get("selected_day") or 0))
         view = MembersPaginationView(self.guild_id, self.clan_name, self.emoji_map, snipe_day=day, db_path=self.db_path)
         await interaction.response.edit_message(embed=view._current_embed(), view=view)
 
-    @discord.ui.button(label="Filtre", emoji="🔍", style=discord.ButtonStyle.secondary, row=0)
-    async def filter_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _filter_cb(self, interaction: discord.Interaction):
         view = FilterView(self.guild_id, self.clan_name, self.emoji_map, db_path=self.db_path)
         embed = build_admin_panel_embed(self.guild_id, self.clan_name, self.emoji_map, db_path=self.db_path)
         await interaction.response.edit_message(embed=embed, view=view)
 
-    @discord.ui.button(label="Ascension", emoji="✨", style=discord.ButtonStyle.secondary, row=0)
-    async def ascension_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _ascension_mode_cb(self, interaction: discord.Interaction):
         state = db.get_admin_state(self.guild_id, db_path=self.db_path)
         new_val = 0 if int(state.get("ascension_only") or 0) else 1
         db.update_admin_state(self.guild_id, {"ascension_only": new_val}, db_path=self.db_path)
-        new_view = AdminPanelView(self.guild_id, self.clan_name, self.emoji_map, db_path=self.db_path)
-        embed = build_admin_panel_embed(self.guild_id, self.clan_name, self.emoji_map, db_path=self.db_path)
-        await interaction.response.edit_message(embed=embed, view=new_view)
+        self._rebuild_items()
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
 
-    @discord.ui.button(label="Reset Déductions", emoji="🔄", style=discord.ButtonStyle.danger, row=0)
-    async def reset_ded_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _reset_ded_cb(self, interaction: discord.Interaction):
         state = db.get_admin_state(self.guild_id, db_path=self.db_path)
         sel = int(state.get("selected_day") or 0)
         db.reset_war_deductions(war_day=(sel if 1 <= sel <= 5 else None), db_path=self.db_path)
-        embed = build_admin_panel_embed(self.guild_id, self.clan_name, self.emoji_map, db_path=self.db_path)
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
 
 
 # ==============================================================================

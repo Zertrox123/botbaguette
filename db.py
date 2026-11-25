@@ -50,8 +50,6 @@ DEFAULT_ADMIN_STATE: Dict[str, Any] = {
     "day_plans_json": json.dumps({"1": "PUSH", "2": "SNIPE", "3": "ECO", "4": "ECO", "5": "ALL-IN"}),
 }
 
-DEDUCTION_LOCK_SECONDS = 600  # 10 minutes anti-faux-positif
-
 _SUFFIXES = {
     "k": 1_000,
     "m": 1_000_000,
@@ -377,20 +375,9 @@ def record_war_deduction(
     now: Optional[int] = None,
     db_path: Optional[str] = None,
 ) -> Tuple[bool, int]:
-    """
-    Record daily scanned war points to deduct from a player's potential for `war_day`.
-    Enforces a 10-minute lock per player/day to prevent false positives.
-    Returns (applied: bool, remaining_lock_seconds: int).
-    """
+    """Record daily scanned war points to deduct from a player's potential for `war_day`."""
     ts = int(now if now is not None else time.time())
     with _connect(db_path) as conn:
-        row = conn.execute(
-            "SELECT scanned_at FROM war_deductions WHERE user_id = ? AND war_day = ?",
-            (user_id, war_day),
-        ).fetchone()
-        if row and (ts - int(row["scanned_at"] or 0)) < DEDUCTION_LOCK_SECONDS:
-            rem = DEDUCTION_LOCK_SECONDS - (ts - int(row["scanned_at"] or 0))
-            return False, rem
         conn.execute(
             """
             INSERT INTO war_deductions (user_id, war_day, deducted_pts, scanned_at)

@@ -335,13 +335,13 @@ class TestProfileUI(unittest.IsolatedAsyncioTestCase):
         ok1, rem1 = db.record_war_deduction(42, 1, 1500, now=10000, db_path=self.db_path)
         self.assertTrue(ok1)
         self.assertEqual(rem1, 0)
-        # Second scan within 10min is blocked
+        # Immediate re-scan overwrites without cooldown
         ok2, rem2 = db.record_war_deduction(42, 1, 2000, now=10120, db_path=self.db_path)
-        self.assertFalse(ok2)
-        self.assertEqual(rem2, 480)
-        # Deducted in calculator: 5000 - 1500 = 3500
+        self.assertTrue(ok2)
+        self.assertEqual(rem2, 0)
+        # Deducted in calculator: 5000 - 2000 = 3000
         deds = db.get_war_deductions(1, db_path=self.db_path)
-        self.assertEqual(war_points.compute_day_potential(p, 1, deducted_pts=deds[42])[0], 3500)
+        self.assertEqual(war_points.compute_day_potential(p, 1, deducted_pts=deds[42])[0], 3000)
 
         # Admin state persistence & PC embed
         db.update_admin_state(999, {"selected_day": 1, "ascension_only": 1, "resource_filter": "competences"}, db_path=self.db_path)

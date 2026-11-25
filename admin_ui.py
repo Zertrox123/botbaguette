@@ -382,7 +382,6 @@ class AdminPanelView(discord.ui.View):
         profiles = db.get_all_profiles(db_path=self.db_path)
         applied_daily = []
         applied_weekly = []
-        locked_lines = []
         unmatched = []
 
         for att in collected[:20]:
@@ -405,24 +404,17 @@ class AdminPanelView(discord.ui.View):
                     )
                     applied_weekly.append(f"• **{matched['pseudo']}** : `{db.format_amount(pts)} pts` *(Hebdo — non déduit du daily)*")
                 else:
-                    ok, lock_rem = db.record_war_deduction(
-                        uid, eff_day, pts, db_path=self.db_path
-                    )
-                    if ok:
-                        applied_daily.append(f"• **{matched['pseudo']}** : `-{db.format_amount(pts)} pts` (J{eff_day})")
-                    else:
-                        locked_lines.append(f"• **{matched['pseudo']}** : verrouillé encore `{lock_rem // 60}m{lock_rem % 60:02d}s`")
+                    db.record_war_deduction(uid, eff_day, pts, db_path=self.db_path)
+                    applied_daily.append(f"• **{matched['pseudo']}** : `-{db.format_amount(pts)} pts` (J{eff_day})")
 
         report = [f"📊 **Résultat du Scan Guerre ({len(collected)} capture(s))**"]
         if applied_daily:
             report.append("\n**📅 Journalier (déduit du calculateur) :**\n" + "\n".join(applied_daily[:20]))
         if applied_weekly:
             report.append("\n**🗓️ Hebdomadaire (suivi semaine uniquement, non déduit du daily) :**\n" + "\n".join(applied_weekly[:20]))
-        if locked_lines:
-            report.append("\n**Ignorés (verrou anti-faux-positif 10min) :**\n" + "\n".join(locked_lines[:10]))
         if unmatched:
             report.append("\n**Non reconnus dans la DB :** " + ", ".join(unmatched[:10]))
-        if not applied_daily and not applied_weekly and not locked_lines:
+        if not applied_daily and not applied_weekly:
             report.append("\n❌ Aucun joueur du clan reconnu sur ces captures.")
 
         # Refresh original panel message

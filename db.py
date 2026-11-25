@@ -411,6 +411,35 @@ def get_war_deductions(war_day: int, db_path: Optional[str] = None) -> Dict[int,
         return {int(r["user_id"]): int(r["deducted_pts"] or 0) for r in rows}
 
 
+def get_user_war_deductions(user_id: int, db_path: Optional[str] = None) -> Dict[int, int]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT war_day, deducted_pts FROM war_deductions WHERE user_id = ? ORDER BY war_day ASC",
+            (user_id,),
+        ).fetchall()
+        return {int(r["war_day"]): int(r["deducted_pts"] or 0) for r in rows if int(r["deducted_pts"] or 0) > 0}
+
+
+def set_war_deduction_manual(user_id: int, war_day: int, deducted_pts: int, db_path: Optional[str] = None) -> None:
+    """Admin manual override for a player's war deduction (bypasses the 10-min OCR lock; 0 clears it)."""
+    pts = max(0, int(deducted_pts))
+    with _connect(db_path) as conn:
+        if pts == 0:
+            conn.execute("DELETE FROM war_deductions WHERE user_id = ? AND war_day = ?", (user_id, war_day))
+        else:
+            conn.execute(
+                """
+                INSERT INTO war_deductions (user_id, war_day, deducted_pts, scanned_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, war_day) DO UPDATE SET
+                    deducted_pts = excluded.deducted_pts,
+                    scanned_at = excluded.scanned_at
+                """,
+                (user_id, war_day, pts, int(time.time())),
+            )
+        conn.commit()
+
+
 def reset_war_deductions(war_day: Optional[int] = None, db_path: Optional[str] = None) -> None:
     with _connect(db_path) as conn:
         if war_day is None:

@@ -297,7 +297,8 @@ async def membre(interaction: discord.Interaction, identifiant: str):
         )
     uid = int(profile["user_id"])
     sdays = db.get_user_snipe_days(uid)
-    embed = admin_ui.build_member_admin_embed(profile, sdays)
+    deds = db.get_user_war_deductions(uid)
+    embed = admin_ui.build_member_admin_embed(profile, sdays, deductions=deds)
     view = admin_ui.MemberEditView(uid)
     await interaction.response.send_message(embed=embed, view=view)
 

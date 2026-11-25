@@ -453,13 +453,23 @@ class AdminPanelView(discord.ui.View):
 # /membre [id] — Fiche Admin d'un Membre
 # ==============================================================================
 
-def build_member_admin_embed(profile: Dict[str, Any], snipe_days: List[int]) -> discord.Embed:
+def build_member_admin_embed(
+    profile: Dict[str, Any],
+    snipe_days: List[int],
+    deductions: Optional[Dict[int, int]] = None,
+) -> discord.Embed:
     sid = profile.get("short_id") or 0
     pseudo = profile.get("pseudo") or f"Joueur {profile['user_id']}"
     age = db.format_relative_age(int(profile.get("updated_at") or 0))
     snipe_str = ", ".join(f"J{d} ({war_points.WAR_DAY_NAMES[d]})" for d in snipe_days) if snipe_days else "Aucun"
     inc_str = "✅ Inclus dans le calculateur" if int(profile.get("include_in_calc", 1)) else "❌ Exclu du calculateur"
     yn = lambda k: "✅ Max / Ascension" if int(profile.get(k) or 0) else "❌ Non"
+    ded_map = deductions or {}
+    ded_str = (
+        ", ".join(f"J{d}: -{db.format_amount(pts)}" for d, pts in sorted(ded_map.items()))
+        if ded_map
+        else "Aucune"
+    )
 
     embed = discord.Embed(
         title=f"⚙️ Gestion Membre — {pseudo} (id: {sid})",
@@ -468,6 +478,7 @@ def build_member_admin_embed(profile: Dict[str, Any], snipe_days: List[int]) -> 
             f"• **Dernière MÀJ profil :** {age}\n"
             f"• **Calculateur :** {inc_str}\n"
             f"• **Snipe :** `{snipe_str}`\n"
+            f"• **Déductions actives :** `{ded_str}`\n"
             f"• **Forge (backend) :** `Niv. {int(profile.get('forge_level') or 0)}`"
         ),
     )
@@ -509,6 +520,44 @@ class MemberSnipeModal(discord.ui.Modal):
         await self.member_view.refresh(interaction)
 
 
+class MemberDeductionModal(discord.ui.Modal):
+    def __init__(self, member_view: "MemberEditView", default_day: int, current_ded: int):
+        super().__init__(title="Modifier Déduction Guerre")
+        self.member_view = member_view
+        self.day_input = discord.ui.TextInput(
+            label="Jour de guerre (1 à 5)",
+            placeholder="Ex: 1 (Mardi) ... 5 (Samedi)",
+            default=str(default_day),
+            required=True,
+            max_length=2,
+        )
+        self.pts_input = discord.ui.TextInput(
+            label="Points à déduire (0 pour annuler)",
+            placeholder="Ex: 201790, 1.5m ou 0",
+            default=str(current_ded),
+            required=True,
+            max_length=20,
+        )
+        self.add_item(self.day_input)
+        self.add_item(self.pts_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw_day = self.day_input.value.strip()
+        if not raw_day.isdigit() or not (1 <= int(raw_day) <= 5):
+            return await interaction.response.send_message("❌ Le jour doit être entre `1` et `5`.", ephemeral=True)
+        try:
+            pts = db.parse_amount(self.pts_input.value)
+        except ValueError as err:
+            return await interaction.response.send_message(f"❌ {err}", ephemeral=True)
+        db.set_war_deduction_manual(
+            self.member_view.target_user_id,
+            int(raw_day),
+            pts,
+            db_path=self.member_view.db_path,
+        )
+        await self.member_view.refresh(interaction)
+
+
 class MemberEditView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return await check_admin_access(interaction)
@@ -539,12 +588,20 @@ class MemberEditView(discord.ui.View):
         self._sync_button_styles()
         p = db.get_or_create_profile(self.target_user_id, db_path=self.db_path)
         sdays = db.get_user_snipe_days(self.target_user_id, db_path=self.db_path)
-        await interaction.response.edit_message(embed=build_member_admin_embed(p, sdays), view=self)
+        deds = db.get_user_war_deductions(self.target_user_id, db_path=self.db_path)
+        await interaction.response.edit_message(embed=build_member_admin_embed(p, sdays, deductions=deds), view=self)
 
     @discord.ui.button(label="Modifier Snipe", emoji="🎯", style=discord.ButtonStyle.primary, row=0)
     async def snipe_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         sdays = db.get_user_snipe_days(self.target_user_id, db_path=self.db_path)
         await interaction.response.send_modal(MemberSnipeModal(self, sdays))
+
+    @discord.ui.button(label="Modifier Déduction", emoji="➖", style=discord.ButtonStyle.primary, row=0)
+    async def deduction_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        today, _ = war_points.get_day_info(datetime.now(war_points.PARIS_TZ))
+        default_day = today or 1
+        deds = db.get_user_war_deductions(self.target_user_id, db_path=self.db_path)
+        await interaction.response.send_modal(MemberDeductionModal(self, default_day, deds.get(default_day, 0)))
 
     @discord.ui.button(label="Calculateur : ON", emoji="🧮", style=discord.ButtonStyle.success, row=0)
     async def calc_toggle(self, interaction: discord.Interaction, button: discord.ui.Button):
